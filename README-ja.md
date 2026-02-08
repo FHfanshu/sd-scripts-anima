@@ -86,6 +86,7 @@ Stable Diffusion等の画像生成モデルの学習、モデルによる画像�
 * [FLUX.1学習](./docs/flux_train_network.md)
 * [LUMINA学習](./docs/lumina_train_network.md)
 * [HunyuanImage-2.1学習](./docs/hunyuan_image_train_network.md)
+* [Anima（Cosmos-Predict2）学習](./docs/anima_train_network.md)
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion学習](./docs/train_textual_inversion.md)
 * [ControlNet-LLLite学習](./docs/train_lllite_README-ja.md) / [英語版](./docs/train_lllite_README.md)
