@@ -29,6 +29,8 @@ class AnimaTokenizeStrategy(TokenizeStrategy):
         self.max_length = int(max_length)
 
     def tokenize(self, text: str | List[str]) -> List[torch.Tensor]:
+        if self.t5_tokenizer is None:
+            raise ValueError("T5 tokenizer is required for Anima training")
         texts = [text] if isinstance(text, str) else text
         qwen = self.qwen_tokenizer(
             texts,
@@ -37,19 +39,14 @@ class AnimaTokenizeStrategy(TokenizeStrategy):
             truncation=True,
             max_length=self.max_length,
         )
-        t5_ids = None
-        if self.t5_tokenizer is not None:
-            t5 = self.t5_tokenizer(
-                texts,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_length,
-            )
-            t5_ids = t5["input_ids"]
-
-        if t5_ids is None:
-            return [qwen["input_ids"], qwen["attention_mask"]]
+        t5 = self.t5_tokenizer(
+            texts,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_length,
+        )
+        t5_ids = t5["input_ids"]
         return [qwen["input_ids"], qwen["attention_mask"], t5_ids]
 
 
@@ -57,11 +54,13 @@ class AnimaTextEncodingStrategy(TextEncodingStrategy):
     def encode_tokens(self, tokenize_strategy: AnimaTokenizeStrategy, models: List[Any], tokens: List[torch.Tensor]) -> List[torch.Tensor]:
         if len(models) < 2:
             raise ValueError("AnimaTextEncodingStrategy expects models=[qwen_model, anima_model]")
+        if len(tokens) < 3:
+            raise ValueError("AnimaTextEncodingStrategy requires [qwen_input_ids, qwen_attention_mask, t5_input_ids]")
         qwen_model = models[0]
         anima_model = models[1]
         qwen_input_ids = tokens[0].to(next(qwen_model.parameters()).device)
         qwen_attention_mask = tokens[1].to(next(qwen_model.parameters()).device)
-        t5_ids = tokens[2] if len(tokens) > 2 else None
+        t5_ids = tokens[2]
         with torch.no_grad():
             outputs = qwen_model(
                 input_ids=qwen_input_ids,
@@ -72,7 +71,7 @@ class AnimaTextEncodingStrategy(TextEncodingStrategy):
             hidden_states = outputs.hidden_states[-1]
             cross = anima_model.preprocess_text_embeds(
                 hidden_states.to(dtype=next(anima_model.parameters()).dtype, device=next(anima_model.parameters()).device),
-                t5_ids.to(next(anima_model.parameters()).device) if t5_ids is not None else None,
+                t5_ids.to(next(anima_model.parameters()).device),
             )
         return [cross]
 
@@ -93,7 +92,56 @@ class AnimaLatentsCachingStrategy(LatentsCachingStrategy):
         return os.path.exists(npz_path)
 
     def cache_batch_latents(self, model: Any, batch: List, flip_aug: bool, alpha_mask: bool, random_crop: bool):
-        raise NotImplementedError("AnimaLatentsCachingStrategy.cache_batch_latents is provided by anima_train.py pipeline.")
+        from library import train_util
+
+        if not hasattr(model, "model") or not hasattr(model, "scale"):
+            raise TypeError("Anima VAE handle must provide model/scale for latents caching")
+
+        img_tensor, alpha_masks, original_sizes, crop_ltrbs = train_util.load_images_and_masks_for_caching(
+            batch, alpha_mask, random_crop
+        )
+        img_tensor = img_tensor.to(device=model.device, dtype=model.dtype)
+
+        with torch.no_grad():
+            latents_tensors = model.model.encode(img_tensor.unsqueeze(2), model.scale).to("cpu")
+        if latents_tensors.ndim == 5 and latents_tensors.shape[2] == 1:
+            latents_tensors = latents_tensors.squeeze(2)
+
+        if flip_aug:
+            flipped = torch.flip(img_tensor, dims=[3])
+            with torch.no_grad():
+                flipped_latents = model.model.encode(flipped.unsqueeze(2), model.scale).to("cpu")
+            if flipped_latents.ndim == 5 and flipped_latents.shape[2] == 1:
+                flipped_latents = flipped_latents.squeeze(2)
+        else:
+            flipped_latents = [None] * len(latents_tensors)
+
+        for index, info in enumerate(batch):
+            latents = latents_tensors[index]
+            flipped_latent = flipped_latents[index]
+            alpha_mask_tensor = alpha_masks[index]
+            original_size = original_sizes[index]
+            crop_ltrb = crop_ltrbs[index]
+
+            if self.cache_to_disk:
+                self.save_latents_to_disk(
+                    info.latents_npz,
+                    latents,
+                    original_size,
+                    crop_ltrb,
+                    flipped_latent,
+                    alpha_mask_tensor,
+                )
+            else:
+                info.latents_original_size = original_size
+                info.latents_crop_ltrb = crop_ltrb
+                info.latents = latents
+                if flip_aug:
+                    info.latents_flipped = flipped_latent
+                info.alpha_mask = alpha_mask_tensor
+
+        if not train_util.HIGH_VRAM:
+            train_util.clean_memory_on_device(model.device)
 
 
 class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
@@ -112,5 +160,5 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
 
     def cache_batch_outputs(self, tokenize_strategy: TokenizeStrategy, models: List[Any], text_encoding_strategy: TextEncodingStrategy, batch: List):
         raise NotImplementedError(
-            "AnimaTextEncoderOutputsCachingStrategy.cache_batch_outputs is provided by anima_train.py pipeline."
+            "AnimaTextEncoderOutputsCachingStrategy is not enabled in native anima_train_network yet."
         )

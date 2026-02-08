@@ -82,6 +82,7 @@ If you find this project helpful, please consider supporting its development via
 * [LUMINA Training](./docs/lumina_train_network.md)
 * [HunyuanImage-2.1 Training](./docs/hunyuan_image_train_network.md)
 * [Anima (Cosmos-Predict2) Training](./docs/anima_train_network.md)
+  * Native entrypoint, no parent-repo bridge dependency
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion Training](./docs/train_textual_inversion.md)
 * [ControlNet-LLLite Training](./docs/train_lllite_README.md) / [Japanese version](./docs/train_lllite_README-ja.md)
