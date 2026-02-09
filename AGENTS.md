@@ -221,3 +221,23 @@
     - 输出：
     - 日志确认 sentinel 触发：`network_dim=100000 >= 100000, forcing lokr_full_matrix=true`
     - 权重体检：存在 `.lokr_w2`、不存在 `.lokr_w2_b`（符合 full-matrix 预期），键前缀全部为 `diffusion_model.*`。
+- 按“sd-scripts-anima × Anima_Trainer 稳定性优先”计划补齐三项能力：
+  - 续训一致性快照：
+    - `train_network.py` 新增通用 hook：`build_resume_snapshot` / `validate_resume_snapshot`，并在 save/load state hook 中读写 `resume_snapshot.json`。
+    - `anima_train_network.py` 实现 Anima 侧关键字段快照与严格差异校验（不一致时启动阶段直接报错）。
+  - 训练监控增强：
+    - `anima_train_network.py` 新增 `--anima_monitor_*` 参数（显存监控、告警策略、阈值配置）。
+    - step logs 增加 `gpu/mem_*` 与 `alert/*` 指标；`alert_policy=raise` 时对 `nonfinite_loss` / `memory_near_limit` 触发中断。
+  - T5 严格校验：
+    - `library/anima_runtime/model_loading.py` 新增 `strict_validation` 路径；
+    - `--t5_tokenizer_validate_strict` 接入 `anima_train_network.py`；
+    - 严格模式校验 special token、id 范围与本地 smoke encode。
+- 测试补充：
+  - 新增 `tests/test_anima_resume_snapshot.py`。
+  - 新增 `tests/test_anima_monitoring.py`。
+  - 更新 `tests/test_anima_train_network.py`（新 CLI 参数默认值与解析）。
+  - 更新 `tests/test_anima_t5_auto_download.py`（strict 模式成功/失败路径）。
+  - 更新 `tests/anima_entry_test_utils.py`（stub `NetworkTrainer` 增加 log/snapshot 接口）。
+- 验证：
+  - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_t5_auto_download.py tests/test_anima_resume_snapshot.py tests/test_anima_monitoring.py tests/test_anima_network_modules.py tests/test_anima_process_batch.py tests/test_anima_config_converter.py tests/test_scheduler_num_cycles_float.py`
+  - 结果：`43 passed`。

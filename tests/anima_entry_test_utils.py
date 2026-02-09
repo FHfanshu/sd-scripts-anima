@@ -23,6 +23,45 @@ def _build_stub_train_network_module() -> types.ModuleType:
         def train(self, args):
             del args
 
+        def build_resume_snapshot(self, args):
+            del args
+            return None
+
+        def validate_resume_snapshot(self, args, snapshot):
+            del args, snapshot
+            return None
+
+        def generate_step_logs(
+            self,
+            args,
+            current_loss,
+            avr_loss,
+            lr_scheduler,
+            lr_descriptions,
+            optimizer=None,
+            keys_scaled=None,
+            mean_norm=None,
+            maximum_norm=None,
+            mean_grad_norm=None,
+            mean_combined_norm=None,
+        ):
+            del (
+                args,
+                lr_scheduler,
+                lr_descriptions,
+                optimizer,
+                keys_scaled,
+                mean_norm,
+                maximum_norm,
+                mean_grad_norm,
+                mean_combined_norm,
+            )
+            return {"loss/current": current_loss, "loss/average": avr_loss}
+
+        def step_logging(self, accelerator, logs, global_step, epoch):
+            del accelerator, logs, global_step, epoch
+            return None
+
     def _setup_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser()
         parser.add_argument("--pretrained_model_name_or_path", type=str, default="")

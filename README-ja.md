@@ -94,7 +94,10 @@ Stable Diffusion等の画像生成モデルの学習、モデルによる画像�
   * 既定の出力は ComfyUI 互換キー（`diffusion_model.*`）
   * LoKr は Kohya/LyCORIS の full-matrix sentinel 互換（`network_dim >= 100000` で `lokr_full_matrix=true`）
   * optimizer/scheduler を含む厳密な再開は `--resume` の state ディレクトリ推奨
+  * resume state には `resume_snapshot.json` が含まれ、主要パラメータ不一致時は再開を中断
   * T5 tokenizer の必須ファイル不足時は起動時に自動ダウンロード（HF優先、失敗時はModelScopeへ自動フォールバック）
+  * `--t5_tokenizer_validate_strict` で tokenizer の厳格検証を有効化可能
+  * `--anima_monitor_*` で学習時のVRAM/告警メトリクスを記録可能
   * 旧設定の移行ツール: `tools/convert_anima_root_to_kohya.py`
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion学習](./docs/train_textual_inversion.md)

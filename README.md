@@ -89,7 +89,10 @@ If you find this project helpful, please consider supporting its development via
   * Exports ComfyUI-compatible keys (`diffusion_model.*`) by default
   * LoKr follows Kohya/LyCORIS full-matrix sentinel semantics (`network_dim >= 100000` forces `lokr_full_matrix=true`)
   * Recommended resume path is `--resume` state directory for full optimizer/scheduler recovery
+  * Resume state includes `resume_snapshot.json`; mismatched key training args are blocked on restart
   * Missing T5 tokenizer files are auto-downloaded at startup by default (HF first, then ModelScope fallback)
+  * Optional strict tokenizer checks are available via `--t5_tokenizer_validate_strict`
+  * Step logs can include VRAM/alert metrics with `--anima_monitor_*` options
   * Migration helper: `tools/convert_anima_root_to_kohya.py`
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion Training](./docs/train_textual_inversion.md)

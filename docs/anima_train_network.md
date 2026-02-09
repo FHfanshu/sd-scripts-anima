@@ -76,7 +76,12 @@ accelerate launch anima_train_network.py \
 - `--t5_tokenizer_modelscope_repo_id`（默认 `nv-community/Cosmos-Predict2-2B-Text2Image`）
 - `--t5_tokenizer_modelscope_revision`（默认 `master`）
 - `--t5_tokenizer_modelscope_subfolder`（默认 `tokenizer`）
+- `--t5_tokenizer_validate_strict`（默认 `false`，开启后在启动阶段执行 tokenizer 严格结构/id 校验）
 - `--train_norm`（默认 `true`，训练 LayerNorm / RMSNorm 的 weight/bias；可用 `--no-train_norm` 关闭）
+- `--anima_monitor_memory`（默认 `true`，记录 CUDA 显存指标）
+- `--anima_monitor_alert_policy`（`warn|raise`，默认 `warn`）
+- `--anima_monitor_memory_warn_ratio`（默认 `0.95`，reserved/total 超阈值触发显存告警）
+- `--anima_monitor_loss_spike_ratio`（默认 `3.0`，loss 相对上一步放大量阈值）
 
 ## 4. 文本条件训练语义
 
@@ -95,6 +100,7 @@ accelerate launch anima_train_network.py \
 - 训练范围默认覆盖 `attn + mlp + llm_adapter + norm`。
 - LoKr 采用 Kohya/LyCORIS 的 full-matrix sentinel 语义：当 `network_dim >= 100000` 时，自动强制 `lokr_full_matrix=true`（不改写原始 dim）。
 - 若需要严格断点续训，建议使用 `--resume` 状态目录（包含 optimizer/scheduler/step）。
+- `--resume` 路径下会携带 `resume_snapshot.json`，重启时会校验关键训练参数；若不一致会在启动阶段直接失败并提示差异字段。
 - `--network_weights` 单文件热启动属于权重初始化，不等价于完整断点恢复。
 
 ## 6. ScheduleFree 约束
@@ -119,3 +125,11 @@ accelerate launch anima_train_network.py \
 
 - `image too large, but cropping and bucketing are disabled`
   - 在 `dataset.toml` 开启 bucket（`enable_bucket=true`）或启用裁剪策略（`random_crop` / `face_crop_aug_range`）。
+
+- `T5 tokenizer strict validation failed`
+  - 开启了 `--t5_tokenizer_validate_strict` 时，会额外校验 tokenizer 的 special token、token id 范围和一次本地 smoke encode。
+  - 如需兼容历史目录或自定义 tokenizer，可先关闭严格模式（`--no-t5_tokenizer_validate_strict`）定位具体问题。
+
+- `Anima monitor alert policy=raise triggered`
+  - 当 `--anima_monitor_alert_policy raise` 且出现 `nonfinite loss` 或显存接近阈值时，训练会主动中止。
+  - 可改为 `warn` 仅记录告警日志，并通过 `--anima_monitor_memory_warn_ratio` 调整阈值。

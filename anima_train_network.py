@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, List
+import math
+from typing import Any, Dict, List, Optional
 
 import torch
 from accelerate import Accelerator
@@ -49,6 +50,99 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         self.qwen_tokenizer = None
         self.t5_tokenizer = None
         self._sample_warned = False
+        self._runtime_args: Optional[argparse.Namespace] = None
+        self._previous_loss_for_monitor: Optional[float] = None
+        self._memory_metric_warning_logged = False
+
+    @staticmethod
+    def _to_optional_int(value):
+        if value is None or str(value).strip() == "":
+            return None
+        return int(value)
+
+    @staticmethod
+    def _to_optional_float(value):
+        if value is None or str(value).strip() == "":
+            return None
+        return float(value)
+
+    def _build_resume_snapshot_fields(self, args: argparse.Namespace) -> Dict[str, Any]:
+        return {
+            "network_module": str(getattr(args, "network_module", "") or ""),
+            "network_dim": self._to_optional_int(getattr(args, "network_dim", None)),
+            "network_alpha": self._to_optional_float(getattr(args, "network_alpha", None)),
+            "train_norm": bool(getattr(args, "train_norm", True)),
+            "optimizer_type": str(getattr(args, "optimizer_type", "") or ""),
+            "lr_scheduler": str(getattr(args, "lr_scheduler", "") or ""),
+            "train_batch_size": self._to_optional_int(getattr(args, "train_batch_size", None)),
+            "gradient_accumulation_steps": self._to_optional_int(getattr(args, "gradient_accumulation_steps", None)),
+            "mixed_precision": str(getattr(args, "mixed_precision", "") or ""),
+            "anima_seq_len": self._to_optional_int(getattr(args, "anima_seq_len", None)),
+            "t5_tokenizer_repo_id": str(getattr(args, "t5_tokenizer_repo_id", "") or ""),
+            "t5_tokenizer_subfolder": str(getattr(args, "t5_tokenizer_subfolder", "") or ""),
+            "t5_tokenizer_modelscope_fallback": bool(getattr(args, "t5_tokenizer_modelscope_fallback", True)),
+            "t5_tokenizer_modelscope_repo_id": str(getattr(args, "t5_tokenizer_modelscope_repo_id", "") or ""),
+            "t5_tokenizer_modelscope_revision": str(getattr(args, "t5_tokenizer_modelscope_revision", "") or ""),
+            "t5_tokenizer_modelscope_subfolder": str(getattr(args, "t5_tokenizer_modelscope_subfolder", "") or ""),
+        }
+
+    def build_resume_snapshot(self, args: argparse.Namespace) -> dict:
+        return {
+            "schema": "anima_resume_snapshot/v1",
+            "fields": self._build_resume_snapshot_fields(args),
+        }
+
+    def validate_resume_snapshot(self, args: argparse.Namespace, snapshot: dict) -> None:
+        if not isinstance(snapshot, dict):
+            raise ValueError("Invalid resume snapshot: expected a JSON object.")
+
+        fields = snapshot.get("fields") if isinstance(snapshot.get("fields"), dict) else snapshot
+        if not isinstance(fields, dict):
+            raise ValueError("Invalid resume snapshot: missing fields object.")
+
+        expected = self._build_resume_snapshot_fields(args)
+        mismatches = []
+        for key, expected_value in expected.items():
+            if key not in fields:
+                mismatches.append(f"{key}: missing in resume snapshot")
+                continue
+            saved_value = fields.get(key)
+            if saved_value != expected_value:
+                mismatches.append(f"{key}: resume={saved_value!r}, current={expected_value!r}")
+
+        if mismatches:
+            details = "; ".join(mismatches)
+            raise ValueError(f"Resume snapshot mismatch detected. {details}")
+
+    def _collect_memory_monitor_logs(self, accelerator: Accelerator) -> Dict[str, float]:
+        args = self._runtime_args
+        if args is None or not bool(getattr(args, "anima_monitor_memory", True)):
+            return {}
+        if accelerator.device.type != "cuda" or not torch.cuda.is_available():
+            return {}
+
+        device_index = accelerator.device.index if accelerator.device.index is not None else torch.cuda.current_device()
+        bytes_in_mb = 1024.0 * 1024.0
+        try:
+            allocated_mb = float(torch.cuda.memory_allocated(device_index) / bytes_in_mb)
+            reserved_mb = float(torch.cuda.memory_reserved(device_index) / bytes_in_mb)
+            peak_allocated_mb = float(torch.cuda.max_memory_allocated(device_index) / bytes_in_mb)
+            total_mb = float(torch.cuda.get_device_properties(device_index).total_memory / bytes_in_mb)
+            usage_ratio = reserved_mb / total_mb if total_mb > 0 else 0.0
+            warn_ratio = float(getattr(args, "anima_monitor_memory_warn_ratio", 0.95) or 0.95)
+            near_limit = usage_ratio >= warn_ratio
+            return {
+                "gpu/mem_allocated_mb": allocated_mb,
+                "gpu/mem_reserved_mb": reserved_mb,
+                "gpu/mem_peak_allocated_mb": peak_allocated_mb,
+                "gpu/mem_usage_ratio": usage_ratio,
+                "alert/memory_near_limit": float(1.0 if near_limit else 0.0),
+            }
+        except Exception as exc:
+            if not self._memory_metric_warning_logged:
+                logger.warning("Failed to collect CUDA memory metrics: %s", exc)
+                self._memory_metric_warning_logged = True
+            return {"alert/memory_near_limit": 0.0}
 
     def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
         super().assert_extra_args(args, train_dataset_group, val_dataset_group)
@@ -103,6 +197,7 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         train_dataset_group.verify_bucket_reso_steps(int(getattr(args, "bucket_reso_steps", 64) or 64))
         if val_dataset_group is not None:
             val_dataset_group.verify_bucket_reso_steps(int(getattr(args, "bucket_reso_steps", 64) or 64))
+        self._runtime_args = args
 
     def load_target_model(self, args, weight_dtype, accelerator):
         transformer = load_anima_transformer(
@@ -130,6 +225,7 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             ),
             modelscope_revision=str(getattr(args, "t5_tokenizer_modelscope_revision", "") or "master"),
             modelscope_subfolder=str(getattr(args, "t5_tokenizer_modelscope_subfolder", "") or "tokenizer"),
+            strict_validation=bool(getattr(args, "t5_tokenizer_validate_strict", False)),
         )
         return AnimaTokenizeStrategy(
             qwen_tokenizer=self.qwen_tokenizer,
@@ -310,6 +406,84 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             loss_per_sample = loss_per_sample * loss_weights.to(device=loss_per_sample.device, dtype=loss_per_sample.dtype)
         return loss_per_sample.mean()
 
+    def generate_step_logs(
+        self,
+        args: argparse.Namespace,
+        current_loss,
+        avr_loss,
+        lr_scheduler,
+        lr_descriptions,
+        optimizer=None,
+        keys_scaled=None,
+        mean_norm=None,
+        maximum_norm=None,
+        mean_grad_norm=None,
+        mean_combined_norm=None,
+    ):
+        logs = super().generate_step_logs(
+            args,
+            current_loss,
+            avr_loss,
+            lr_scheduler,
+            lr_descriptions,
+            optimizer,
+            keys_scaled,
+            mean_norm,
+            maximum_norm,
+            mean_grad_norm,
+            mean_combined_norm,
+        )
+
+        loss_spike_ratio = float(getattr(args, "anima_monitor_loss_spike_ratio", 3.0) or 3.0)
+        nonfinite_loss = False
+        loss_spike = False
+
+        try:
+            current_loss_value = float(current_loss)
+            nonfinite_loss = not math.isfinite(current_loss_value)
+            if nonfinite_loss:
+                self._previous_loss_for_monitor = None
+            else:
+                prev = self._previous_loss_for_monitor
+                if prev is not None and prev > 0 and current_loss_value > (prev * loss_spike_ratio):
+                    loss_spike = True
+                self._previous_loss_for_monitor = current_loss_value
+        except Exception:
+            nonfinite_loss = True
+            self._previous_loss_for_monitor = None
+
+        logs["alert/nonfinite_loss"] = float(1.0 if nonfinite_loss else 0.0)
+        logs["alert/loss_spike"] = float(1.0 if loss_spike else 0.0)
+        logs["alert/memory_near_limit"] = float(logs.get("alert/memory_near_limit", 0.0))
+        logs["alert/any"] = float(1.0 if (nonfinite_loss or loss_spike) else 0.0)
+        return logs
+
+    def step_logging(self, accelerator: Accelerator, logs: dict, global_step: int, epoch: int):
+        runtime_args = self._runtime_args
+        merged_logs = dict(logs)
+        merged_logs.update(self._collect_memory_monitor_logs(accelerator))
+
+        nonfinite_loss = bool(float(merged_logs.get("alert/nonfinite_loss", 0.0)) > 0.0)
+        loss_spike = bool(float(merged_logs.get("alert/loss_spike", 0.0)) > 0.0)
+        memory_near_limit = bool(float(merged_logs.get("alert/memory_near_limit", 0.0)) > 0.0)
+        merged_logs["alert/any"] = float(1.0 if (nonfinite_loss or loss_spike or memory_near_limit) else 0.0)
+
+        super().step_logging(accelerator, merged_logs, global_step, epoch)
+
+        if runtime_args is None:
+            return
+
+        alert_policy = str(getattr(runtime_args, "anima_monitor_alert_policy", "warn") or "warn").lower()
+        if alert_policy == "raise" and (nonfinite_loss or memory_near_limit):
+            reasons = []
+            if nonfinite_loss:
+                reasons.append("nonfinite_loss")
+            if memory_near_limit:
+                reasons.append("memory_near_limit")
+            raise RuntimeError(
+                f"Anima monitor alert policy=raise triggered at global_step={global_step}: {', '.join(reasons)}"
+            )
+
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet):
         del args, epoch, global_step, device, vae, tokenizer, text_encoder, unet
         if not self._sample_warned and accelerator.is_main_process:
@@ -366,6 +540,12 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Tokenizer subfolder inside ModelScope fallback repo.",
     )
     parser.add_argument(
+        "--t5_tokenizer_validate_strict",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable strict local tokenizer structure/id validation before training starts.",
+    )
+    parser.add_argument(
         "--anima_attention_backend",
         type=str,
         default="torch",
@@ -388,6 +568,31 @@ def setup_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Train LayerNorm/RMSNorm weight/bias parameters alongside adapter layers.",
+    )
+    parser.add_argument(
+        "--anima_monitor_memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Log CUDA memory metrics during training steps.",
+    )
+    parser.add_argument(
+        "--anima_monitor_alert_policy",
+        type=str,
+        default="warn",
+        choices=["warn", "raise"],
+        help="Alert policy when monitor detects invalid loss or near-OOM memory usage.",
+    )
+    parser.add_argument(
+        "--anima_monitor_memory_warn_ratio",
+        type=float,
+        default=0.95,
+        help="Warn/raise threshold for reserved VRAM ratio (reserved / total).",
+    )
+    parser.add_argument(
+        "--anima_monitor_loss_spike_ratio",
+        type=float,
+        default=3.0,
+        help="Loss spike threshold ratio against previous finite step loss.",
     )
     parser.set_defaults(
         network_module="networks.lora_anima",

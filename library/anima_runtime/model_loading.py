@@ -345,7 +345,7 @@ def load_qwen(qwen_path, device, dtype):
     return tokenizer, model
 
 
-def _validate_t5_tokenizer_dir(t5_dir: Path):
+def _validate_t5_tokenizer_dir(t5_dir: Path, *, strict_validation: bool = False):
     if not t5_dir.exists():
         raise FileNotFoundError(f"T5 tokenizer directory not found: {t5_dir}")
     if not t5_dir.is_dir():
@@ -366,6 +366,58 @@ def _validate_t5_tokenizer_dir(t5_dir: Path):
             )
     except Exception as exc:
         LOGGER.warning("Failed to inspect T5 tokenizer config.json: %s", exc)
+
+    if strict_validation:
+        from transformers import T5TokenizerFast
+
+        try:
+            tokenizer = T5TokenizerFast.from_pretrained(str(t5_dir), local_files_only=True)
+        except Exception as exc:
+            raise ValueError(f"T5 tokenizer strict validation failed to load tokenizer: {exc}") from exc
+
+        vocab_size = int(getattr(tokenizer, "vocab_size", 0) or 0)
+        if vocab_size <= 0:
+            raise ValueError("T5 tokenizer strict validation failed: invalid vocab_size.")
+
+        required_ids = {
+            "pad_token_id": getattr(tokenizer, "pad_token_id", None),
+            "eos_token_id": getattr(tokenizer, "eos_token_id", None),
+            "unk_token_id": getattr(tokenizer, "unk_token_id", None),
+        }
+        for key, value in required_ids.items():
+            if value is None:
+                raise ValueError(f"T5 tokenizer strict validation failed: {key} is missing.")
+            value_int = int(value)
+            if value_int < 0 or value_int >= vocab_size:
+                raise ValueError(
+                    f"T5 tokenizer strict validation failed: {key}={value_int} out of range [0, {vocab_size})."
+                )
+
+        required_tokens = {
+            "pad_token": getattr(tokenizer, "pad_token", None),
+            "eos_token": getattr(tokenizer, "eos_token", None),
+            "unk_token": getattr(tokenizer, "unk_token", None),
+        }
+        for key, value in required_tokens.items():
+            if value is None or str(value).strip() == "":
+                raise ValueError(f"T5 tokenizer strict validation failed: {key} is missing.")
+
+        try:
+            encoded = tokenizer("anima strict validation", return_tensors="pt")
+            input_ids = encoded.get("input_ids")
+            if input_ids is None or input_ids.numel() == 0:
+                raise ValueError("T5 tokenizer strict validation failed: empty input_ids from smoke encode.")
+            max_id = int(input_ids.max().item())
+            min_id = int(input_ids.min().item())
+            if min_id < 0 or max_id >= vocab_size:
+                raise ValueError(
+                    f"T5 tokenizer strict validation failed: encoded id range [{min_id}, {max_id}] "
+                    f"outside vocab_size={vocab_size}."
+                )
+        except Exception as exc:
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError(f"T5 tokenizer strict validation failed during smoke encode: {exc}") from exc
 
 
 def _missing_t5_tokenizer_files(t5_dir: Path):
@@ -534,6 +586,7 @@ def load_t5_tokenizer(
     modelscope_repo_id: str = T5_MODELSCOPE_FALLBACK_REPO_ID,
     modelscope_revision: str = T5_MODELSCOPE_FALLBACK_REVISION,
     modelscope_subfolder: str = T5_MODELSCOPE_FALLBACK_SUBFOLDER,
+    strict_validation: bool = False,
 ):
     from transformers import T5TokenizerFast
 
@@ -541,7 +594,7 @@ def load_t5_tokenizer(
     missing = _missing_t5_tokenizer_files(tokenizer_dir)
     if missing:
         if not auto_download:
-            _validate_t5_tokenizer_dir(tokenizer_dir)
+            _validate_t5_tokenizer_dir(tokenizer_dir, strict_validation=strict_validation)
         LOGGER.warning(
             "T5 tokenizer files missing in %s: %s. Auto-downloading from source=%s (subfolder=%s)",
             tokenizer_dir,
@@ -559,7 +612,7 @@ def load_t5_tokenizer(
             modelscope_subfolder=modelscope_subfolder,
         )
 
-    _validate_t5_tokenizer_dir(tokenizer_dir)
+    _validate_t5_tokenizer_dir(tokenizer_dir, strict_validation=strict_validation)
     return T5TokenizerFast.from_pretrained(str(tokenizer_dir), local_files_only=True)
 
 

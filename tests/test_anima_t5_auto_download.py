@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import torch
 
 from library.anima_runtime import model_loading
 
@@ -150,3 +151,47 @@ def test_parse_t5_source_modelscope_tree_url():
     assert source.repo_id == "nv-community/Cosmos-Predict2-2B-Text2Image"
     assert source.revision == "master"
     assert source.subfolder == "tokenizer"
+
+
+class _GoodTokenizer:
+    vocab_size = 32128
+    pad_token_id = 0
+    eos_token_id = 1
+    unk_token_id = 2
+    pad_token = "<pad>"
+    eos_token = "</s>"
+    unk_token = "<unk>"
+
+    def __call__(self, text, return_tensors="pt"):
+        del text, return_tensors
+        return {"input_ids": torch.tensor([[0, 1, 2]], dtype=torch.long)}
+
+
+class _BadTokenizer(_GoodTokenizer):
+    pad_token_id = -1
+
+
+def test_validate_t5_tokenizer_strict_fails_on_invalid_token_ids(tmp_path: Path, monkeypatch):
+    t5_dir = tmp_path / "strict_invalid"
+    _write_min_t5_files(t5_dir)
+    monkeypatch.setattr("transformers.T5TokenizerFast.from_pretrained", lambda *args, **kwargs: _BadTokenizer())
+
+    with pytest.raises(ValueError, match="pad_token_id"):
+        model_loading._validate_t5_tokenizer_dir(t5_dir, strict_validation=True)
+
+
+def test_load_t5_tokenizer_strict_validation_uses_fast_tokenizer_checks(tmp_path: Path, monkeypatch):
+    t5_dir = tmp_path / "strict_valid"
+    _write_min_t5_files(t5_dir)
+    calls = {"count": 0}
+
+    def _fake_from_pretrained(*args, **kwargs):
+        del args, kwargs
+        calls["count"] += 1
+        return _GoodTokenizer()
+
+    monkeypatch.setattr("transformers.T5TokenizerFast.from_pretrained", _fake_from_pretrained)
+    tokenizer = model_loading.load_t5_tokenizer(str(t5_dir), auto_download=False, strict_validation=True)
+    assert isinstance(tokenizer, _GoodTokenizer)
+    # one call during strict validation + one call for final tokenizer load
+    assert calls["count"] == 2

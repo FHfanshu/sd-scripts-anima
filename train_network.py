@@ -58,6 +58,16 @@ class NetworkTrainer:
         self.vae_scale_factor = 0.18215
         self.is_sdxl = False
 
+    def build_resume_snapshot(self, args: argparse.Namespace) -> Optional[dict]:
+        """Return a JSON-serializable snapshot for resume compatibility checks."""
+        del args
+        return None
+
+    def validate_resume_snapshot(self, args: argparse.Namespace, snapshot: dict) -> None:
+        """Validate the snapshot loaded from resume state. Raise on mismatch."""
+        del args, snapshot
+        return None
+
     # TODO 他のスクリプトと共通化する
     def generate_step_logs(
         self,
@@ -947,6 +957,12 @@ class NetworkTrainer:
             with open(train_state_file, "w", encoding="utf-8") as f:
                 json.dump({"current_epoch": current_epoch.value, "current_step": current_step.value + 1}, f)
 
+            resume_snapshot = self.build_resume_snapshot(args)
+            if resume_snapshot is not None:
+                resume_snapshot_file = os.path.join(output_dir, "resume_snapshot.json")
+                with open(resume_snapshot_file, "w", encoding="utf-8") as f:
+                    json.dump(resume_snapshot, f, ensure_ascii=False, sort_keys=True, indent=2)
+
         steps_from_state = None
 
         def load_model_hook(models, input_dir):
@@ -967,6 +983,13 @@ class NetworkTrainer:
                     data = json.load(f)
                 steps_from_state = data["current_step"]
                 logger.info(f"load train state from {train_state_file}: {data}")
+
+            resume_snapshot_file = os.path.join(input_dir, "resume_snapshot.json")
+            if os.path.exists(resume_snapshot_file):
+                with open(resume_snapshot_file, "r", encoding="utf-8") as f:
+                    snapshot = json.load(f)
+                self.validate_resume_snapshot(args, snapshot)
+                logger.info("resume snapshot validated: %s", resume_snapshot_file)
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)

@@ -137,3 +137,47 @@ def test_parser_t5_modelscope_fallback_can_disable():
     parser = native_entry.setup_parser()
     args = parser.parse_args(["--no-t5_tokenizer_modelscope_fallback"])
     assert args.t5_tokenizer_modelscope_fallback is False
+
+
+def test_parser_t5_strict_validation_default_false():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args([])
+    assert args.t5_tokenizer_validate_strict is False
+
+
+def test_parser_t5_strict_validation_can_enable():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args(["--t5_tokenizer_validate_strict"])
+    assert args.t5_tokenizer_validate_strict is True
+
+
+def test_parser_anima_monitor_defaults():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args([])
+    assert args.anima_monitor_memory is True
+    assert args.anima_monitor_alert_policy == "warn"
+    assert args.anima_monitor_memory_warn_ratio == pytest.approx(0.95)
+    assert args.anima_monitor_loss_spike_ratio == pytest.approx(3.0)
+
+
+def test_parser_anima_monitor_options():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args(
+        [
+            "--no-anima_monitor_memory",
+            "--anima_monitor_alert_policy",
+            "raise",
+            "--anima_monitor_memory_warn_ratio",
+            "0.9",
+            "--anima_monitor_loss_spike_ratio",
+            "2.5",
+        ]
+    )
+    assert args.anima_monitor_memory is False
+    assert args.anima_monitor_alert_policy == "raise"
+    assert args.anima_monitor_memory_warn_ratio == pytest.approx(0.9)
+    assert args.anima_monitor_loss_spike_ratio == pytest.approx(2.5)
