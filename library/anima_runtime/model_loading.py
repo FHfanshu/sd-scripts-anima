@@ -4,6 +4,8 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import torch
 
@@ -11,6 +13,90 @@ LOGGER = logging.getLogger(__name__)
 
 T5_EXPECTED_VOCAB_SIZE = 32128
 T5_REQUIRED_FILES = ("config.json", "spiece.model", "tokenizer.json")
+T5_OPTIONAL_FILES = ("tokenizer_config.json", "special_tokens_map.json")
+T5_DEFAULT_REPO_ID = "google/t5-v1_1-base"
+T5_DEFAULT_SUBFOLDER = "tokenizer"
+T5_DEFAULT_REVISION = "main"
+T5_MODELSCOPE_FALLBACK_REPO_ID = "nv-community/Cosmos-Predict2-2B-Text2Image"
+T5_MODELSCOPE_FALLBACK_REVISION = "master"
+T5_MODELSCOPE_FALLBACK_SUBFOLDER = "tokenizer"
+
+
+@dataclass
+class _RepoSource:
+    provider: str
+    repo_id: str
+    revision: str
+    subfolder: str
+
+
+def _normalize_subfolder(subfolder: Optional[str]) -> str:
+    return str(subfolder or "").strip().strip("/")
+
+
+def _parse_t5_repo_source(spec: str, *, default_provider: str, default_revision: str, default_subfolder: str) -> _RepoSource:
+    text = str(spec or "").strip()
+    if not text:
+        raise ValueError("T5 repo source cannot be empty.")
+
+    default_subfolder = _normalize_subfolder(default_subfolder)
+    if "://" not in text:
+        return _RepoSource(
+            provider=default_provider,
+            repo_id=text,
+            revision=str(default_revision or T5_DEFAULT_REVISION),
+            subfolder=default_subfolder,
+        )
+
+    parsed = urlparse(text)
+    host = parsed.netloc.lower()
+    parts = [p for p in parsed.path.split("/") if p]
+
+    if "huggingface.co" in host:
+        if len(parts) < 2:
+            raise ValueError(f"Invalid HuggingFace URL for T5 source: {text}")
+        repo_id = f"{parts[0]}/{parts[1]}"
+        revision = str(default_revision or T5_DEFAULT_REVISION)
+        subfolder = default_subfolder
+        if len(parts) >= 4 and parts[2] in ("tree", "blob", "resolve"):
+            revision = parts[3] or revision
+            inferred_subfolder = _normalize_subfolder("/".join(parts[4:]))
+            if inferred_subfolder:
+                subfolder = inferred_subfolder
+        return _RepoSource(provider="hf", repo_id=repo_id, revision=revision, subfolder=subfolder)
+
+    if "modelscope.cn" in host:
+        repo_id = ""
+        revision = str(default_revision or T5_MODELSCOPE_FALLBACK_REVISION)
+        subfolder = default_subfolder
+
+        if "models" in parts:
+            idx = parts.index("models")
+            if len(parts) >= idx + 3:
+                repo_id = f"{parts[idx + 1]}/{parts[idx + 2]}"
+                tail = parts[idx + 3 :]
+                if tail and tail[0] in ("tree", "resolve"):
+                    if len(tail) >= 2 and tail[1]:
+                        revision = tail[1]
+                    inferred_subfolder = _normalize_subfolder("/".join(tail[2:]))
+                    if inferred_subfolder:
+                        subfolder = inferred_subfolder
+
+        if not repo_id:
+            raise ValueError(f"Invalid ModelScope URL for T5 source: {text}")
+
+        q = parse_qs(parsed.query)
+        if q.get("Revision"):
+            revision = str(q["Revision"][0] or revision)
+        if q.get("FilePath"):
+            file_path = str(q["FilePath"][0] or "")
+            inferred = _normalize_subfolder(str(Path(file_path).parent).replace("\\", "/"))
+            if inferred and inferred != ".":
+                subfolder = inferred
+
+        return _RepoSource(provider="modelscope", repo_id=repo_id, revision=revision, subfolder=subfolder)
+
+    raise ValueError(f"Unsupported URL host for T5 source: {text}")
 
 
 def load_anima_class():
@@ -282,12 +368,199 @@ def _validate_t5_tokenizer_dir(t5_dir: Path):
         LOGGER.warning("Failed to inspect T5 tokenizer config.json: %s", exc)
 
 
-def load_t5_tokenizer(t5_dir: str):
+def _missing_t5_tokenizer_files(t5_dir: Path):
+    if not t5_dir.exists() or not t5_dir.is_dir():
+        return list(T5_REQUIRED_FILES)
+    return [name for name in T5_REQUIRED_FILES if not (t5_dir / name).exists()]
+
+
+def _download_file(url: str, dst_path: Path):
+    import requests
+
+    response = requests.get(url, timeout=60)
+    response.raise_for_status()
+    dst_path.write_bytes(response.content)
+
+
+def _download_t5_tokenizer_from_hf(t5_dir: Path, *, repo_id: str, revision: str, subfolder: str):
+    from transformers import AutoConfig, T5TokenizerFast
+
+    t5_dir.mkdir(parents=True, exist_ok=True)
+    candidates = []
+    normalized_subfolder = _normalize_subfolder(subfolder)
+    if normalized_subfolder:
+        candidates.append(normalized_subfolder)
+    candidates.append("")
+
+    errors = []
+    for candidate in candidates:
+        kwargs = {"revision": revision}
+        if candidate:
+            kwargs["subfolder"] = candidate
+        try:
+            tokenizer = T5TokenizerFast.from_pretrained(repo_id, **kwargs)
+            tokenizer.save_pretrained(str(t5_dir))
+
+            config = None
+            for config_subfolder in ([candidate, ""] if candidate else [""]):
+                config_kwargs = {"revision": revision}
+                if config_subfolder:
+                    config_kwargs["subfolder"] = config_subfolder
+                try:
+                    config = AutoConfig.from_pretrained(repo_id, **config_kwargs)
+                    break
+                except Exception:
+                    continue
+
+            if config is not None:
+                config.save_pretrained(str(t5_dir))
+            else:
+                fallback_config = {"model_type": "t5", "vocab_size": int(getattr(tokenizer, "vocab_size", T5_EXPECTED_VOCAB_SIZE))}
+                (t5_dir / "config.json").write_text(json.dumps(fallback_config), encoding="utf-8")
+            return
+        except Exception as exc:
+            errors.append(f"subfolder={candidate or '<root>'}: {exc}")
+
+    raise RuntimeError(
+        f"Failed to download T5 tokenizer from Hugging Face repo={repo_id} revision={revision}. "
+        + " | ".join(errors)
+    )
+
+
+def _download_t5_tokenizer_from_modelscope(t5_dir: Path, *, repo_id: str, revision: str, subfolder: str):
+    t5_dir.mkdir(parents=True, exist_ok=True)
+    base = f"https://www.modelscope.cn/models/{repo_id}/resolve/{revision}"
+    normalized_subfolder = _normalize_subfolder(subfolder)
+    if normalized_subfolder:
+        base = f"{base}/{normalized_subfolder}"
+
+    required_errors = []
+    for filename in T5_REQUIRED_FILES:
+        try:
+            _download_file(f"{base}/{filename}", t5_dir / filename)
+        except Exception as exc:
+            required_errors.append(f"{filename}: {exc}")
+
+    if required_errors:
+        raise RuntimeError(
+            f"Failed to download required T5 tokenizer files from ModelScope repo={repo_id} "
+            f"revision={revision} subfolder={normalized_subfolder or '<root>'}. "
+            + " | ".join(required_errors)
+        )
+
+    for filename in T5_OPTIONAL_FILES:
+        try:
+            _download_file(f"{base}/{filename}", t5_dir / filename)
+        except Exception as exc:
+            LOGGER.warning("Optional T5 tokenizer file not downloaded from ModelScope (%s): %s", filename, exc)
+
+
+def _download_t5_tokenizer_assets(
+    t5_dir: Path,
+    repo_id: str,
+    *,
+    repo_subfolder: str = T5_DEFAULT_SUBFOLDER,
+    modelscope_fallback: bool = True,
+    modelscope_repo_id: str = T5_MODELSCOPE_FALLBACK_REPO_ID,
+    modelscope_revision: str = T5_MODELSCOPE_FALLBACK_REVISION,
+    modelscope_subfolder: str = T5_MODELSCOPE_FALLBACK_SUBFOLDER,
+):
+    source = _parse_t5_repo_source(
+        repo_id,
+        default_provider="hf",
+        default_revision=T5_DEFAULT_REVISION,
+        default_subfolder=repo_subfolder,
+    )
+
+    if source.provider == "modelscope":
+        _download_t5_tokenizer_from_modelscope(
+            t5_dir,
+            repo_id=source.repo_id,
+            revision=source.revision,
+            subfolder=source.subfolder,
+        )
+        return
+
+    try:
+        _download_t5_tokenizer_from_hf(
+            t5_dir,
+            repo_id=source.repo_id,
+            revision=source.revision,
+            subfolder=source.subfolder,
+        )
+    except Exception as hf_exc:
+        if not modelscope_fallback:
+            raise RuntimeError(f"Hugging Face T5 tokenizer download failed: {hf_exc}") from hf_exc
+
+        ms_source = _parse_t5_repo_source(
+            modelscope_repo_id,
+            default_provider="modelscope",
+            default_revision=modelscope_revision,
+            default_subfolder=modelscope_subfolder,
+        )
+        try:
+            _download_t5_tokenizer_from_modelscope(
+                t5_dir,
+                repo_id=ms_source.repo_id,
+                revision=ms_source.revision,
+                subfolder=ms_source.subfolder,
+            )
+            LOGGER.warning(
+                "Falling back to ModelScope for T5 tokenizer download: repo=%s revision=%s subfolder=%s",
+                ms_source.repo_id,
+                ms_source.revision,
+                ms_source.subfolder or "<root>",
+            )
+        except Exception as ms_exc:
+            raise RuntimeError(
+                "T5 tokenizer download failed from both Hugging Face and ModelScope. "
+                f"HF error: {hf_exc} ; ModelScope error: {ms_exc}"
+            ) from ms_exc
+
+    missing = _missing_t5_tokenizer_files(t5_dir)
+    if missing:
+        raise FileNotFoundError(
+            f"Auto-downloaded T5 tokenizer still missing required files: {missing} (dir={t5_dir}, repo={repo_id})"
+        )
+
+
+def load_t5_tokenizer(
+    t5_dir: str,
+    *,
+    auto_download: bool = True,
+    repo_id: str = T5_DEFAULT_REPO_ID,
+    repo_subfolder: str = T5_DEFAULT_SUBFOLDER,
+    modelscope_fallback: bool = True,
+    modelscope_repo_id: str = T5_MODELSCOPE_FALLBACK_REPO_ID,
+    modelscope_revision: str = T5_MODELSCOPE_FALLBACK_REVISION,
+    modelscope_subfolder: str = T5_MODELSCOPE_FALLBACK_SUBFOLDER,
+):
     from transformers import T5TokenizerFast
 
     tokenizer_dir = Path(t5_dir).expanduser().resolve()
+    missing = _missing_t5_tokenizer_files(tokenizer_dir)
+    if missing:
+        if not auto_download:
+            _validate_t5_tokenizer_dir(tokenizer_dir)
+        LOGGER.warning(
+            "T5 tokenizer files missing in %s: %s. Auto-downloading from source=%s (subfolder=%s)",
+            tokenizer_dir,
+            missing,
+            repo_id,
+            _normalize_subfolder(repo_subfolder) or "<root>",
+        )
+        _download_t5_tokenizer_assets(
+            tokenizer_dir,
+            repo_id=repo_id,
+            repo_subfolder=repo_subfolder,
+            modelscope_fallback=modelscope_fallback,
+            modelscope_repo_id=modelscope_repo_id,
+            modelscope_revision=modelscope_revision,
+            modelscope_subfolder=modelscope_subfolder,
+        )
+
     _validate_t5_tokenizer_dir(tokenizer_dir)
-    return T5TokenizerFast.from_pretrained(str(tokenizer_dir))
+    return T5TokenizerFast.from_pretrained(str(tokenizer_dir), local_files_only=True)
 
 
 def tokenize_qwen(tokenizer, captions, max_length=512):

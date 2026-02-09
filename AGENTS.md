@@ -36,3 +36,204 @@
   - 更新 `tests/test_anima_train_network.py`
   - 新增 `tests/test_anima_independence.py`
   - 新增 `tests/test_anima_process_batch.py`
+
+## 2026-02-09
+
+- 读取并遵循 `AGENTS.md`、`.ai/claude.prompt.md`、`.ai/context/01-overview.md`。
+- 按 `README.md` 的 Windows 安装流程配置项目虚拟环境（`e:\sd-scripts-anima\venv`）：
+  - 使用 `Python 3.10` 创建 venv（避免默认 `Python 3.14` 兼容性风险）。
+  - 在 venv 内升级 `pip`、`setuptools`、`wheel`。
+  - 安装 `torch==2.6.0`、`torchvision==0.21.0`（CUDA 12.4）。
+  - 安装并升级 `requirements.txt` 全量依赖。
+- 验证环境：
+  - `python` 版本：`3.10.6`
+  - `torch` 版本：`2.6.0+cu124`
+  - `torch.cuda.is_available()`：`True`
+- 执行外部配置 `E:\trainerV1.01\trainer\trainerv1.02\config\save\newzx.toml` 的训练 smoke 测试并定位失败链路：
+  - 初始失败：`anima_train_network.py` 直接访问缺失字段 `cache_text_encoder_outputs`。
+  - 后续失败：`Anima` 缺少 `enable_gradient_checkpointing`、`device` 接口兼容问题。
+  - 后续失败：`AnimaAdapterNetwork` 缺少 `prepare_grad_etc` 接口。
+  - 10 step 冒烟阶段失败：默认配置在首步前 OOM，且分辨率/裁剪桶配置与数据集尺寸存在冲突（`image too large` 断言）。
+- 形成审查结论：当前 Anima 原生入口与通用 `train_network.py` 之间存在多处接口契约未对齐，另有 `config_adapter` 映射语义问题（如 `max_steps` 与 `epochs`、`lr_scheduler_num_cycles` 精度丢失、bucket相关参数映射不完整）。
+- 按“切换到 Kohya 原生配置”方案实施修复：
+  - `anima_train_network.py`：
+    - 移除 root-style `--config` 入口与运行时映射调用。
+    - 保留并继续使用优化器别名规范化。
+    - 禁用 argparse 缩写（`allow_abbrev=False`），防止 `--config` 被误解析为 `--config_file`。
+    - 保持并增强参数健壮性（可选字段通过 `getattr` 读取，`gradient_checkpointing` 对 Anima 强制降级关闭）。
+  - `library/anima_runtime/config_adapter.py`：
+    - 删除 root-style 运行时配置映射逻辑，仅保留优化器别名工具（`coerce_optimizer_type` / `normalize_optimizer_aliases`）。
+  - `library/train_util.py`：
+    - 将 `--lr_scheduler_num_cycles` 参数类型由 `int` 调整为 `int_or_float`，支持如 `0.5`。
+  - 新增迁移工具：
+    - `tools/convert_anima_root_to_kohya.py`（旧 root-style TOML -> `train_args.toml` + `dataset.toml`）。
+  - 文档更新：
+    - 重写 `docs/anima_train_network.md`，明确只支持 Kohya 原生配置，`--config` 已移除，并加入迁移工具与 10-step smoke 模板说明。
+    - 更新 `README.md`、`README-ja.md` 的 Anima 条目，补充新配置策略与迁移脚本入口。
+  - 新增 smoke 配置模板：
+    - `configs/smoke/anima_10steps_train_args.toml`
+    - `configs/smoke/anima_dataset.toml`
+  - 测试更新/新增：
+    - 更新 `tests/test_anima_train_network.py`（移除 root-style 适配测试，新增 `--config` 移除与健壮性断言）。
+    - 更新 `tests/test_anima_network_modules.py`（覆盖 `prepare_grad_etc` 等训练契约方法）。
+    - 更新 `tests/anima_entry_test_utils.py`（`lr_scheduler_num_cycles` 浮点兼容）。
+    - 新增 `tests/test_scheduler_num_cycles_float.py`。
+    - 新增 `tests/test_anima_config_converter.py`。
+- 验证说明：
+  - 受环境网络策略限制，无法安装 `pytest`（访问包索引被拒绝），未能执行完整 pytest 套件。
+  - 已执行替代自检：
+    - `python -m compileall` 对核心变更文件进行语法校验通过。
+    - 运行内联 Python 断言，验证：`--config` 不再可用、`lr_scheduler_num_cycles` 支持浮点、迁移脚本关键映射正确、Anima 网络契约方法可调用。
+- 使用 `newzx` 训练集与本地 `anima-models` 执行 smoke test（10 steps）：
+  - 模型路径根目录：`E:\sd-scripts-anima\anima-models`
+  - 数据集目录：`E:\lora-scripts-v1.10.0\train\newzx`（140张图）
+  - 命令：`accelerate launch anima_train_network.py ... --max_train_steps 10`（`batch_size=1`, `resolution=512`, `enable_bucket=true`, `anima_seq_len=128`）
+  - 结果：训练成功完成 10 steps，退出码 `0`，并输出 checkpoint：
+    - `E:\sd-scripts-anima\output\smoke_newzx\smoke_newzx_lokr-step00000010.safetensors`
+    - `E:\sd-scripts-anima\output\smoke_newzx\smoke_newzx_lokr.safetensors`
+- 对 smoke 产出的 LoKr 权重做结构/数值体检：
+  - 文件可正常读取：`1020` tensors，metadata 完整（`ss_network_module=networks.lokr_anima`，`ss_network_dim=8`，`ss_max_train_steps=10`）。
+  - 无数值异常：`NaN/Inf` 均为 `0`。
+  - 但发现可疑点：所有 `lokr_w2_b` 张量全为 `0`（`340/340`），而 `lokr_w1`、`lokr_w2_a` 非零；这意味着 LoKr 分解中的输出分支可能未产生有效更新。
+  - `step00000010` 与最终 `last` 文件的 tensor 值完全一致（仅 metadata 差异导致 hash 不同）。
+- 按“固定 LLMAdapter 模式、T5 强依赖”计划完成修复：
+  - `networks/_anima_adapter_common.py`
+    - `prepare_grad_etc` 改为恢复 adapter 参数 `requires_grad=True`，并显式将注入层设为 `train()`。
+    - `on_epoch_start` 同步恢复参数可训练状态，避免 `unet.requires_grad_(False)` 后 adapter 长期冻结。
+  - `anima_train_network.py`
+    - 移除训练路径中 `preprocess_text_embeds(...)` 的 `torch.no_grad()` 包裹（Qwen 仍保持 `no_grad=True`）。
+    - 维持 T5 强依赖校验（`t5_tokenizer_dir` 必填、batch 中 `t5_ids` 缺失直接报错）。
+  - `library/strategy_anima.py`
+    - 增加 `t5_input_ids` 非空校验，禁止无 T5 回退路径。
+  - `library/anima_backend/modelling/anima_modeling.py`
+    - 增加 `enable_gradient_checkpointing` no-op 兼容接口，避免外部误调用崩溃。
+  - `tools/convert_anima_root_to_kohya.py`
+    - 增加 `model.t5_tokenizer_dir / model.t5_tokenizer_path` 强校验；缺失时报清晰错误。
+  - 文档与模板更新：
+    - `docs/anima_train_network.md`、`README.md`、`README-ja.md` 明确 LLMAdapter 训练语义默认启用且 T5 必需。
+    - `configs/smoke/anima_10steps_train_args.toml` 增加 T5 必填说明注释。
+- 测试更新与验证：
+  - 更新 `tests/test_anima_network_modules.py`：新增 `unet.requires_grad_(False)` 后 `prepare_grad_etc` 恢复断言。
+  - 更新 `tests/test_anima_process_batch.py`：新增
+    - 缺失 `t5_ids` 报错断言；
+    - `preprocess_text_embeds` 梯度可回传断言。
+  - 更新 `tests/test_anima_config_converter.py`：新增缺失 T5 配置转换失败断言。
+  - 在 venv 安装 `pytest` 后执行：
+    - `pytest -q tests/test_anima_network_modules.py tests/test_anima_train_network.py tests/test_anima_process_batch.py tests/test_scheduler_num_cycles_float.py tests/test_anima_config_converter.py`
+    - 结果：`16 passed`。
+- 使用 `newzx` + `anima-models` 重新执行 10-step smoke（修复后）：
+  - 训练输出：
+    - `E:\sd-scripts-anima\output\smoke_newzx_llmfix\smoke_newzx_lokr_llmfix-step00000010.safetensors`
+    - `E:\sd-scripts-anima\output\smoke_newzx_llmfix\smoke_newzx_lokr_llmfix.safetensors`
+  - 结果：训练 10 steps 成功完成，退出码 `0`。
+  - 权重体检：`lokr_w2_b` 不再全零（`0/340` 为零，`340/340` 非零），与修复目标一致。
+- 新增“训练启动时自动下载 T5 文件”能力：
+  - `library/anima_runtime/model_loading.py`
+    - 新增 `T5_DEFAULT_REPO_ID=google/t5-v1_1-base`。
+    - 新增缺失文件检测与自动下载流程：当 `t5_tokenizer_dir` 缺 `config.json` / `spiece.model` / `tokenizer.json` 时，默认自动下载并落盘。
+    - `load_t5_tokenizer(...)` 扩展参数：
+      - `auto_download`（默认 `True`）
+      - `repo_id`（默认 `google/t5-v1_1-base`）
+    - 下载后强制本地加载（`local_files_only=True`）。
+  - `library/anima_models.py`
+    - `load_anima_t5_tokenizer` 支持透传自动下载参数。
+  - `anima_train_network.py`
+    - 新增 CLI 参数：
+      - `--auto_download_t5_tokenizer/--no-auto_download_t5_tokenizer`
+      - `--t5_tokenizer_repo_id`
+    - `get_tokenize_strategy` 调用 T5 加载时传入上述参数。
+- 文档更新：
+  - `docs/anima_train_network.md`：增加自动下载参数与行为说明。
+  - `README.md` / `README-ja.md`：增加“默认自动下载 T5 文件”说明。
+- 新增测试：
+  - `tests/test_anima_t5_auto_download.py`
+    - 覆盖“缺文件自动下载”路径。
+    - 覆盖“关闭自动下载时缺文件直接报错”路径。
+- 测试执行：
+  - `pytest -q tests/test_anima_t5_auto_download.py tests/test_anima_train_network.py tests/test_anima_process_batch.py tests/test_anima_network_modules.py tests/test_anima_config_converter.py tests/test_scheduler_num_cycles_float.py`
+  - 结果：`18 passed`。
+- 真实下载验证：
+  - 通过 `load_t5_tokenizer('output/t5_autodl_smoke_<uuid>', auto_download=True)` 在启动阶段成功自动下载并生成所需文件：
+    - `config.json`
+    - `spiece.model`
+    - `tokenizer.json`
+- 按“Comfy-only 导出 + train_norm 默认开启”实施细化修复：
+  - `anima_train_network.py`
+    - 新增 `--train_norm/--no-train_norm`（默认 `True`）。
+    - 新增 `apply_anima_network_defaults(args)`，在启动阶段将 `train_norm=<true|false>` 强制注入 `network_args`，确保网络模块可读取。
+  - `networks/_anima_adapter_common.py`
+    - 新增统一布尔解析 `_parse_bool`，修复字符串布尔值误判风险。
+    - `apply_to` 增加 Norm 参数收集（`LayerNorm` / `RMSNorm` / 自定义 `RMSNorm` 类名识别），并把 Norm 参数加入训练参数集合。
+    - 记录 Norm 初始参数快照，导出时以差分写入 `w_norm/b_norm`。
+    - 导出改为 Comfy-only 键：统一写入 `diffusion_model.*`。
+    - LoRA/LoKr 导出新增 `.alpha` 键，避免缩放语义丢失。
+    - 加载逻辑支持 Comfy 键回读（含 `diffusion_model.*` 与旧格式兼容），并支持 Norm 差分回填。
+- 新增/更新测试：
+  - 更新 `tests/test_anima_network_modules.py`
+    - 增加 `train_norm=true/false` 行为断言；默认开启时 Norm 参数进入优化器参数集。
+    - Dummy 模型增加 `llm_adapter` 与 norm 结构覆盖。
+  - 更新 `tests/test_anima_train_network.py`
+    - 增加 `--train_norm` 默认值、`--no-train_norm` 解析、`network_args` 注入断言。
+  - 新增 `tests/test_anima_comfy_export_keys.py`
+    - 断言导出键全部以 `diffusion_model.` 开头。
+    - 断言 LoRA/LoKr 后缀、`.alpha`、`w_norm/b_norm`、`llm_adapter` 键存在。
+- 文档同步：
+  - `docs/anima_train_network.md`：补充 `train_norm` 默认开启、Comfy-only 导出、`--resume` 续训建议。
+  - `README.md` / `README-ja.md`：补充上述行为摘要。
+- 回归验证：
+  - `pytest -q tests/test_anima_independence.py tests/test_anima_network_modules.py tests/test_anima_comfy_export_keys.py tests/test_anima_train_network.py tests/test_anima_process_batch.py tests/test_anima_t5_auto_download.py tests/test_anima_config_converter.py`
+  - 结果：`24 passed`。
+- 集成 smoke（newzx + anima-models，10 steps）：
+  - 命令：`accelerate launch anima_train_network.py --network_module networks.lokr_anima --anima_transformer E:/sd-scripts-anima/anima-models/diffusion_models/anima-preview.safetensors --vae E:/sd-scripts-anima/anima-models/vae/qwen_image_vae.safetensors --qwen E:/sd-scripts-anima/anima-models/text_encoders --t5_tokenizer_dir E:/sd-scripts-anima/anima-models/t5/t5_old --train_data_dir E:/lora-scripts-v1.10.0/train/newzx --output_dir E:/sd-scripts-anima/output/smoke_newzx_comfy_norm --output_name smoke_newzx_lokr_comfy_norm --resolution 512 --train_batch_size 1 --max_train_steps 10 ...`。
+  - 结果：10 steps 成功完成，输出：
+    - `E:\sd-scripts-anima\output\smoke_newzx_comfy_norm\smoke_newzx_lokr_comfy_norm-step00000010.safetensors`
+    - `E:\sd-scripts-anima\output\smoke_newzx_comfy_norm\smoke_newzx_lokr_comfy_norm.safetensors`
+  - 权重体检：
+    - 全部键满足 `diffusion_model.*`。
+    - 包含 `llm_adapter`、`w_norm`、`.alpha`、`lokr_w2_b`。
+    - `lokr_w2_b` 非零比例 `1.0`（`768000/768000`）。
+    - metadata 中 `ss_network_args` 含 `{"train_norm": "true", ...}`。
+- 按“LoKr Full-Matrix Sentinel + Cosmos T5 回退”计划完成实现：
+  - `networks/_anima_adapter_common.py`
+    - 引入 `network_dim >= 100000` 的 Kohya/LyCORIS sentinel 语义：自动强制 `lokr_full_matrix=true`（不改写 dim）。
+    - 增加触发日志，便于训练日志可观测性。
+  - `library/anima_runtime/model_loading.py`
+    - 新增 T5 源解析：支持 HF repo id、HF URL、ModelScope URL。
+    - 新增 `repo_subfolder`、ModelScope fallback 配置参数。
+    - 自动下载改为 HF 优先；HF 失败（含 gated/网络异常）后自动回退 ModelScope。
+  - `anima_train_network.py`
+    - 新增并透传参数：
+      - `--t5_tokenizer_subfolder`
+      - `--t5_tokenizer_modelscope_fallback/--no-t5_tokenizer_modelscope_fallback`
+      - `--t5_tokenizer_modelscope_repo_id`
+      - `--t5_tokenizer_modelscope_revision`
+      - `--t5_tokenizer_modelscope_subfolder`
+  - 生产配置更新：`configs/production/newzx_10epoch_single.toml`
+    - `network_dim = 100000`（full-matrix sentinel）
+    - T5 下载源改为 `https://huggingface.co/nvidia/Cosmos-Predict2-2B-Text2Image/tree/main/tokenizer`
+    - 开启并配置 ModelScope 自动回退。
+- 新增/更新测试：
+  - `tests/test_anima_network_modules.py`
+    - 新增 `network_dim=100000` 自动 full-matrix 断言。
+  - `tests/test_anima_t5_auto_download.py`
+    - 新增 HF 成功不回退、HF 失败回退 ModelScope、HF/HF URL/ModelScope URL 解析断言。
+  - `tests/test_anima_train_network.py`
+    - 新增 ModelScope fallback CLI 默认值与关闭开关解析断言。
+- 测试验证：
+  - `pytest -q tests/test_anima_network_modules.py tests/test_anima_train_network.py tests/test_anima_t5_auto_download.py tests/test_anima_process_batch.py tests/test_anima_config_converter.py tests/test_scheduler_num_cycles_float.py`
+  - 结果：`30 passed`。
+  - `pytest -q tests/test_anima_independence.py tests/test_anima_network_modules.py tests/test_anima_comfy_export_keys.py tests/test_anima_train_network.py tests/test_anima_process_batch.py tests/test_anima_t5_auto_download.py tests/test_anima_config_converter.py tests/test_scheduler_num_cycles_float.py`
+  - 结果：`34 passed`。
+- 实测验证：
+  - T5 回退下载验证：使用 HF Cosmos URL 作为源，触发 HF gated 后自动回退 ModelScope 成功，下载并校验文件：
+    - `config.json`
+    - `spiece.model`
+    - `tokenizer.json`
+    - `tokenizer_config.json`
+    - `special_tokens_map.json`
+  - 集成 smoke（`newzx + anima-models`，`network_dim=100000`，10 steps）成功：
+    - 输出：
+      - `E:\sd-scripts-anima\output\smoke_newzx_fullmatrix\smoke_newzx_lokr_fullmatrix-step00000010.safetensors`
+      - `E:\sd-scripts-anima\output\smoke_newzx_fullmatrix\smoke_newzx_lokr_fullmatrix.safetensors`
+    - 日志确认 sentinel 触发：`network_dim=100000 >= 100000, forcing lokr_full_matrix=true`
+    - 权重体检：存在 `.lokr_w2`、不存在 `.lokr_w2_b`（符合 full-matrix 预期），键前缀全部为 `diffusion_model.*`。

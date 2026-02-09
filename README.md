@@ -83,6 +83,14 @@ If you find this project helpful, please consider supporting its development via
 * [HunyuanImage-2.1 Training](./docs/hunyuan_image_train_network.md)
 * [Anima (Cosmos-Predict2) Training](./docs/anima_train_network.md)
   * Native entrypoint, no parent-repo bridge dependency
+  * Uses Kohya-native config (`--config_file` + `--dataset_config`), root-style `--config` is removed
+  * LLMAdapter training path is the default; `--t5_tokenizer_dir` is required
+  * `--train_norm` is enabled by default (can be disabled with `--no-train_norm`)
+  * Exports ComfyUI-compatible keys (`diffusion_model.*`) by default
+  * LoKr follows Kohya/LyCORIS full-matrix sentinel semantics (`network_dim >= 100000` forces `lokr_full_matrix=true`)
+  * Recommended resume path is `--resume` state directory for full optimizer/scheduler recovery
+  * Missing T5 tokenizer files are auto-downloaded at startup by default (HF first, then ModelScope fallback)
+  * Migration helper: `tools/convert_anima_root_to_kohya.py`
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion Training](./docs/train_textual_inversion.md)
 * [ControlNet-LLLite Training](./docs/train_lllite_README.md) / [Japanese version](./docs/train_lllite_README-ja.md)

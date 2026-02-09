@@ -228,3 +228,15 @@ class Anima(MiniTrainDIT):
             return self.llm_adapter(text_embeds, text_ids)
         else:
             return text_embeds
+
+    def enable_gradient_checkpointing(self, *args, **kwargs):
+        del args, kwargs
+        # Native Anima trainer disables gradient checkpointing for this model.
+        return None
+
+    @property
+    def device(self):
+        try:
+            return next(self.parameters()).device
+        except StopIteration:
+            return torch.device("cpu")

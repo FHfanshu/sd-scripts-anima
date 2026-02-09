@@ -1,0 +1,17 @@
+[general]
+shuffle_caption = true
+caption_extension = ".txt"
+keep_tokens = 0
+flip_aug = false
+
+[[datasets]]
+resolution = 512
+batch_size = 8
+enable_bucket = true
+min_bucket_reso = 256
+max_bucket_reso = 1024
+bucket_reso_steps = 64
+
+[[datasets.subsets]]
+image_dir = "E:/lora-scripts-v1.10.0/train/newzx/1_zx"
+num_repeats = 1

@@ -35,5 +35,5 @@ def load_anima_qwen_model(qwen_path, device, dtype):
     return load_qwen_model(qwen_path, device, dtype)
 
 
-def load_anima_t5_tokenizer(t5_dir):
-    return load_t5_tokenizer(t5_dir)
+def load_anima_t5_tokenizer(t5_dir, **kwargs):
+    return load_t5_tokenizer(t5_dir, **kwargs)

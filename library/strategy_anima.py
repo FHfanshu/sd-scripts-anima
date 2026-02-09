@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List
 
 import numpy as np
 import os
@@ -19,7 +19,7 @@ from library.strategy_base import (
 class AnimaTokenBatch:
     qwen_input_ids: torch.Tensor
     qwen_attention_mask: torch.Tensor
-    t5_input_ids: Optional[torch.Tensor]
+    t5_input_ids: torch.Tensor
 
 
 class AnimaTokenizeStrategy(TokenizeStrategy):
@@ -61,6 +61,8 @@ class AnimaTextEncodingStrategy(TextEncodingStrategy):
         qwen_input_ids = tokens[0].to(next(qwen_model.parameters()).device)
         qwen_attention_mask = tokens[1].to(next(qwen_model.parameters()).device)
         t5_ids = tokens[2]
+        if t5_ids is None:
+            raise ValueError("AnimaTextEncodingStrategy requires non-empty t5_input_ids.")
         with torch.no_grad():
             outputs = qwen_model(
                 input_ids=qwen_input_ids,

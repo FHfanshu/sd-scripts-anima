@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 import fnmatch
 import re
@@ -29,6 +28,35 @@ DEFAULT_TARGETS_V101 = [
     "mlp.0",
     "mlp.2",
 ]
+
+COMFY_PREFIX = "diffusion_model."
+LOKR_FULL_MATRIX_DIM_SENTINEL = 100000
+ADAPTER_SUFFIXES = (
+    ".lora_down.weight",
+    ".lora_up.weight",
+    ".lokr_w1",
+    ".lokr_w2",
+    ".lokr_w1_a",
+    ".lokr_w1_b",
+    ".lokr_w2_a",
+    ".lokr_w2_b",
+    ".alpha",
+)
+
+
+def _parse_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off", ""):
+        return False
+    return bool(default)
 
 
 def _factorization(dimension: int, factor: int) -> tuple[int, int]:
@@ -205,6 +233,7 @@ class AnimaAdapterNetwork(torch.nn.Module):
         network_alpha: float = 1.0,
         neuron_dropout: Optional[float] = None,
         target_modules: Optional[List[str]] = None,
+        train_norm: bool = True,
         lokr_factor: int = 8,
         lokr_full_matrix: bool = False,
         lokr_decompose_both: bool = False,
@@ -218,15 +247,43 @@ class AnimaAdapterNetwork(torch.nn.Module):
         self.network_alpha = float(network_alpha)
         self.neuron_dropout = float(neuron_dropout or 0.0)
         self.target_modules = [t.strip() for t in (target_modules or DEFAULT_TARGETS_V101) if str(t).strip()]
+        self.train_norm = bool(train_norm)
         self.lokr_factor = int(lokr_factor)
         self.lokr_full_matrix = bool(lokr_full_matrix)
         self.lokr_decompose_both = bool(lokr_decompose_both)
         self.lokr_rank_dropout = float(lokr_rank_dropout)
         self.lokr_module_dropout = float(lokr_module_dropout)
         self.injected_layers: Dict[str, torch.nn.Module] = {}
+        self.norm_trainable_params: Dict[str, torch.nn.Parameter] = {}
+        self._norm_base_params: Dict[str, torch.Tensor] = {}
         self._trainable_params: List[torch.nn.Parameter] = []
         self._last_weight_norms: Optional[torch.Tensor] = None
         self._last_grad_norms: Optional[torch.Tensor] = None
+
+    @staticmethod
+    def _is_norm_module(module: torch.nn.Module) -> bool:
+        if isinstance(module, torch.nn.LayerNorm):
+            return True
+        rms_cls = getattr(torch.nn, "RMSNorm", None)
+        if rms_cls is not None and isinstance(module, rms_cls):
+            return True
+        return module.__class__.__name__.lower() in {"rmsnorm", "layernorm"}
+
+    @staticmethod
+    def _to_comfy_adapter_key(internal_key: str) -> str:
+        if internal_key.startswith(COMFY_PREFIX):
+            return internal_key
+        return f"{COMFY_PREFIX}{internal_key}"
+
+    @staticmethod
+    def _to_internal_adapter_key(raw_key: str) -> Optional[str]:
+        key = str(raw_key)
+        if key.startswith(COMFY_PREFIX):
+            key = key[len(COMFY_PREFIX) :]
+        for suffix in ADAPTER_SUFFIXES:
+            if key.endswith(suffix):
+                return key
+        return None
 
     def _match_target(self, module_name: str) -> bool:
         leaf = module_name.split(".")[-1]
@@ -291,8 +348,34 @@ class AnimaAdapterNetwork(torch.nn.Module):
         params: List[torch.nn.Parameter] = []
         for wrapped in injected.values():
             params.extend([p for p in wrapped.adapter.parameters() if p.requires_grad])
+
+        norm_params: Dict[str, torch.nn.Parameter] = {}
+        norm_base_params: Dict[str, torch.Tensor] = {}
+        if self.train_norm:
+            for name, module in unet.named_modules():
+                if not self._is_norm_module(module):
+                    continue
+                for attr in ("weight", "bias"):
+                    param = getattr(module, attr, None)
+                    if not isinstance(param, torch.nn.Parameter):
+                        continue
+                    param_name = f"{name}.{attr}" if name else attr
+                    if not param.requires_grad:
+                        param.requires_grad_(True)
+                    norm_params[param_name] = param
+                    norm_base_params[param_name] = param.detach().cpu().clone()
+
+        self.norm_trainable_params = norm_params
+        self._norm_base_params = norm_base_params
+        params.extend(norm_params.values())
         self._trainable_params = params
-        logger.info("Anima %s injected layers: %d", self.network_type.upper(), len(self.injected_layers))
+        logger.info(
+            "Anima %s injected layers: %d, train_norm=%s, norm_params=%d",
+            self.network_type.upper(),
+            len(self.injected_layers),
+            self.train_norm,
+            len(self.norm_trainable_params),
+        )
 
     def set_multiplier(self, multiplier: float):
         self.multiplier = float(multiplier)
@@ -315,8 +398,27 @@ class AnimaAdapterNetwork(torch.nn.Module):
     def enable_gradient_checkpointing(self):
         return None
 
-    def on_epoch_start(self, text_encoder, unet):
+    def _set_injected_train_mode(self):
         self.train()
+        for layer in self.injected_layers.values():
+            layer.train()
+
+    def prepare_grad_etc(self, text_encoder, unet):
+        del text_encoder, unet
+        self._set_injected_train_mode()
+        if not self._trainable_params:
+            logger.warning("Anima %s has no trainable adapter params in prepare_grad_etc", self.network_type.upper())
+            return
+        for param in self._trainable_params:
+            if not param.requires_grad:
+                param.requires_grad_(True)
+
+    def on_epoch_start(self, text_encoder, unet):
+        del text_encoder, unet
+        self._set_injected_train_mode()
+        for param in self._trainable_params:
+            if not param.requires_grad:
+                param.requires_grad_(True)
 
     def _state_pairs(self, name: str, layer: torch.nn.Module):
         if self.network_type == "lokr":
@@ -334,37 +436,129 @@ class AnimaAdapterNetwork(torch.nn.Module):
                 pairs.append((f"{name}.lokr_w2_a", adapter.lokr_w2_a))
             if hasattr(adapter, "lokr_w2_b"):
                 pairs.append((f"{name}.lokr_w2_b", adapter.lokr_w2_b))
+            pairs.append((f"{name}.alpha", torch.tensor(float(getattr(adapter, "alpha", self.network_alpha)))))
             return pairs
         return [
             (f"{name}.lora_down.weight", layer.adapter.lora_down.weight),
             (f"{name}.lora_up.weight", layer.adapter.lora_up.weight),
+            (f"{name}.alpha", torch.tensor(float(getattr(layer.adapter, "alpha", self.network_alpha)))),
         ]
 
     def _adapter_state_dict(self):
         sd = {}
         for name, layer in self.injected_layers.items():
             for key, tensor in self._state_pairs(name, layer):
-                sd[key] = tensor.detach().cpu()
+                sd[self._to_comfy_adapter_key(key)] = tensor.detach().cpu()
+
+        for norm_param_name, param in self.norm_trainable_params.items():
+            if "." not in norm_param_name:
+                continue
+            module_name, attr = norm_param_name.rsplit(".", 1)
+            if attr not in ("weight", "bias"):
+                continue
+
+            base = self._norm_base_params.get(norm_param_name)
+            if base is None:
+                continue
+
+            current = param.detach().cpu()
+            delta = current - base.to(dtype=current.dtype)
+            suffix = "w_norm" if attr == "weight" else "b_norm"
+            sd[f"{COMFY_PREFIX}{module_name}.{suffix}"] = delta
         return sd
+
+    def _load_norm_state_dict(self, weights_sd: Dict[str, torch.Tensor]):
+        missing: List[str] = []
+        unexpected: List[str] = []
+        loaded = 0
+
+        if not self.norm_trainable_params:
+            return {"missing": missing, "unexpected": unexpected, "loaded": loaded}
+
+        for norm_param_name, param in self.norm_trainable_params.items():
+            if "." not in norm_param_name:
+                continue
+
+            module_name, attr = norm_param_name.rsplit(".", 1)
+            if attr not in ("weight", "bias"):
+                continue
+
+            suffix = "w_norm" if attr == "weight" else "b_norm"
+            comfy_key = f"{COMFY_PREFIX}{module_name}.{suffix}"
+            legacy_delta_key = f"{module_name}.{suffix}"
+            legacy_absolute_key = f"__anima_norm__.{norm_param_name}"
+
+            source_key = None
+            source_mode = None
+            if comfy_key in weights_sd:
+                source_key = comfy_key
+                source_mode = "delta"
+            elif legacy_delta_key in weights_sd:
+                source_key = legacy_delta_key
+                source_mode = "delta"
+            elif legacy_absolute_key in weights_sd:
+                source_key = legacy_absolute_key
+                source_mode = "absolute"
+
+            if source_key is None:
+                missing.append(norm_param_name)
+                continue
+
+            value = weights_sd[source_key].detach().cpu()
+            if source_mode == "delta":
+                base = self._norm_base_params.get(norm_param_name)
+                if base is None:
+                    unexpected.append(source_key)
+                    continue
+                value = base.to(dtype=value.dtype) + value
+
+            param.data.copy_(value.to(device=param.device, dtype=param.dtype))
+            loaded += 1
+
+        return {"missing": missing, "unexpected": unexpected, "loaded": loaded}
 
     def _load_adapter_state_dict(self, weights_sd: Dict[str, torch.Tensor], strict: bool = True):
         expected = {}
         for name, layer in self.injected_layers.items():
             for key, tensor in self._state_pairs(name, layer):
+                if key.endswith(".alpha"):
+                    continue
                 expected[key] = tensor
 
-        missing = [k for k in expected if k not in weights_sd]
-        unexpected = [k for k in weights_sd if k not in expected]
-        if strict and missing:
-            raise RuntimeError(f"Missing adapter keys: {missing[:3]}")
-        if strict and unexpected:
-            raise RuntimeError(f"Unexpected adapter keys: {unexpected[:3]}")
-
-        for k, p in expected.items():
-            if k not in weights_sd:
+        normalized = {}
+        unexpected = []
+        for raw_key, value in weights_sd.items():
+            internal_key = self._to_internal_adapter_key(raw_key)
+            if internal_key is None:
                 continue
-            p.data.copy_(weights_sd[k].to(device=p.device, dtype=p.dtype))
-        return {"missing": missing, "unexpected": unexpected}
+            if internal_key.endswith(".alpha"):
+                continue
+            if internal_key in expected:
+                normalized[internal_key] = value
+            else:
+                unexpected.append(str(raw_key))
+
+        missing = [k for k in expected if k not in normalized]
+        for k, p in expected.items():
+            if k not in normalized:
+                continue
+            p.data.copy_(normalized[k].to(device=p.device, dtype=p.dtype))
+
+        norm_info = self._load_norm_state_dict(weights_sd)
+        missing_all = missing + norm_info["missing"]
+        unexpected_all = unexpected + norm_info["unexpected"]
+
+        if strict and missing_all:
+            raise RuntimeError(f"Missing adapter keys: {missing_all[:3]}")
+        if strict and unexpected_all:
+            raise RuntimeError(f"Unexpected adapter keys: {unexpected_all[:3]}")
+
+        return {
+            "missing": missing_all,
+            "unexpected": unexpected_all,
+            "norm_loaded": norm_info["loaded"],
+            "norm_missing": len(norm_info["missing"]),
+        }
 
     def save_weights(self, file: str, dtype: Optional[torch.dtype], metadata: Optional[dict] = None):
         sd = self._adapter_state_dict()
@@ -387,7 +581,10 @@ class AnimaAdapterNetwork(torch.nn.Module):
             obj = torch.load(file, map_location="cpu")
             weights_sd = obj["state_dict"] if isinstance(obj, dict) and "state_dict" in obj else obj
         info = self._load_adapter_state_dict(weights_sd, strict=False)
-        return f"loaded: missing={len(info['missing'])} unexpected={len(info['unexpected'])}"
+        return (
+            f"loaded: missing={len(info['missing'])} unexpected={len(info['unexpected'])} "
+            f"norm_loaded={info.get('norm_loaded', 0)} norm_missing={info.get('norm_missing', 0)}"
+        )
 
     def merge_to(self, text_encoder, unet, weights_sd, dtype=None, device=None):
         if not self.injected_layers:
@@ -443,17 +640,29 @@ def build_anima_network(network_type: str, multiplier: float, network_dim: Optio
         network_dim = 4
     if network_alpha is None:
         network_alpha = 1.0
+    network_dim = int(network_dim)
     target_modules = _parse_target_modules(kwargs)
+    lokr_full_matrix_requested = _parse_bool(kwargs.get("lokr_full_matrix", False), default=False)
+    lokr_full_matrix_from_dim = network_type == "lokr" and network_dim >= LOKR_FULL_MATRIX_DIM_SENTINEL
+    lokr_full_matrix = lokr_full_matrix_requested or lokr_full_matrix_from_dim
+    if network_type == "lokr" and lokr_full_matrix_from_dim and not lokr_full_matrix_requested:
+        logger.info(
+            "Anima LoKr: network_dim=%d >= %d, forcing lokr_full_matrix=true (Kohya/LyCORIS sentinel semantics).",
+            network_dim,
+            LOKR_FULL_MATRIX_DIM_SENTINEL,
+        )
+
     network = AnimaAdapterNetwork(
         network_type=network_type,
         multiplier=multiplier,
-        network_dim=int(network_dim),
+        network_dim=network_dim,
         network_alpha=float(network_alpha),
         neuron_dropout=float(kwargs.get("neuron_dropout", 0.0) or 0.0),
         target_modules=target_modules,
+        train_norm=_parse_bool(kwargs.get("train_norm", True), default=True),
         lokr_factor=int(kwargs.get("lokr_factor", 8) or 8),
-        lokr_full_matrix=bool(kwargs.get("lokr_full_matrix", False)),
-        lokr_decompose_both=bool(kwargs.get("lokr_decompose_both", False)),
+        lokr_full_matrix=lokr_full_matrix,
+        lokr_decompose_both=_parse_bool(kwargs.get("lokr_decompose_both", False), default=False),
         lokr_rank_dropout=float(kwargs.get("lokr_rank_dropout", 0.0) or 0.0),
         lokr_module_dropout=float(kwargs.get("lokr_module_dropout", 0.0) or 0.0),
     )

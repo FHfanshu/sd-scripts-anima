@@ -41,7 +41,7 @@ def _build_stub_train_network_module() -> types.ModuleType:
         parser.add_argument("--learning_rate", type=float, default=1e-4)
         parser.add_argument("--lr_scheduler", type=str, default="constant")
         parser.add_argument("--lr_warmup_steps", type=float, default=0)
-        parser.add_argument("--lr_scheduler_num_cycles", type=int, default=1)
+        parser.add_argument("--lr_scheduler_num_cycles", type=float, default=1)
         parser.add_argument("--lr_scheduler_min_lr_ratio", type=float, default=None)
         parser.add_argument("--cache_text_encoder_outputs", action="store_true")
         parser.add_argument("--cache_text_encoder_outputs_to_disk", action="store_true")

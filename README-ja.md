@@ -88,6 +88,14 @@ Stable Diffusion等の画像生成モデルの学習、モデルによる画像�
 * [HunyuanImage-2.1学習](./docs/hunyuan_image_train_network.md)
 * [Anima（Cosmos-Predict2）学習](./docs/anima_train_network.md)
   * ネイティブ学習入口（親リポジトリ依存なし）
+  * Kohyaネイティブ設定（`--config_file` + `--dataset_config`）を使用。root-style `--config` は廃止
+  * LLMAdapter学習経路がデフォルトで、`--t5_tokenizer_dir` は必須
+  * `--train_norm` はデフォルトで有効（`--no-train_norm` で無効化）
+  * 既定の出力は ComfyUI 互換キー（`diffusion_model.*`）
+  * LoKr は Kohya/LyCORIS の full-matrix sentinel 互換（`network_dim >= 100000` で `lokr_full_matrix=true`）
+  * optimizer/scheduler を含む厳密な再開は `--resume` の state ディレクトリ推奨
+  * T5 tokenizer の必須ファイル不足時は起動時に自動ダウンロード（HF優先、失敗時はModelScopeへ自動フォールバック）
+  * 旧設定の移行ツール: `tools/convert_anima_root_to_kohya.py`
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion学習](./docs/train_textual_inversion.md)
 * [ControlNet-LLLite学習](./docs/train_lllite_README-ja.md) / [英語版](./docs/train_lllite_README.md)

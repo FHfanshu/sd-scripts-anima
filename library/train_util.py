@@ -3754,9 +3754,10 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
     )
     parser.add_argument(
         "--lr_scheduler_num_cycles",
-        type=int,
+        type=int_or_float,
         default=1,
-        help="Number of restarts for cosine scheduler with restarts / cosine with restartsスケジューラでのリスタート回数",
+        help="Number of cycles for cosine schedulers (float is supported, e.g. 0.5 for cosine)"
+        + " / cosine系スケジューラのサイクル数（float対応、例: cosineでは0.5）",
     )
     parser.add_argument(
         "--lr_scheduler_power",
