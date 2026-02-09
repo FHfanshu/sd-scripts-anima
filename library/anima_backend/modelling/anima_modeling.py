@@ -172,6 +172,7 @@ class LLMAdapter(nn.Module):
         ])
         self.out_proj = nn.Linear(model_dim, target_dim)
         self.norm = nn.RMSNorm(target_dim, eps=1e-6)
+        self.gradient_checkpointing = False
 
     def forward(self, source_hidden_states, target_input_ids, target_attention_mask=None, source_attention_mask=None):
         if target_attention_mask is not None:
@@ -190,8 +191,32 @@ class LLMAdapter(nn.Module):
         position_ids_context = torch.arange(context.shape[1], device=x.device).unsqueeze(0)
         position_embeddings = self.rotary_emb(x, position_ids)
         position_embeddings_context = self.rotary_emb(x, position_ids_context)
-        for block in self.blocks:
-            x = block(x, context, target_attention_mask=target_attention_mask, source_attention_mask=source_attention_mask, position_embeddings=position_embeddings, position_embeddings_context=position_embeddings_context)
+        use_grad_checkpointing = bool(self.gradient_checkpointing) and self.training
+        if use_grad_checkpointing:
+            from torch.utils.checkpoint import checkpoint
+
+            for block in self.blocks:
+                def custom_forward(hidden_states, blk=block):
+                    return blk(
+                        hidden_states,
+                        context,
+                        target_attention_mask=target_attention_mask,
+                        source_attention_mask=source_attention_mask,
+                        position_embeddings=position_embeddings,
+                        position_embeddings_context=position_embeddings_context,
+                    )
+
+                x = checkpoint(custom_forward, x, use_reentrant=False)
+        else:
+            for block in self.blocks:
+                x = block(
+                    x,
+                    context,
+                    target_attention_mask=target_attention_mask,
+                    source_attention_mask=source_attention_mask,
+                    position_embeddings=position_embeddings,
+                    position_embeddings_context=position_embeddings_context,
+                )
         return self.norm(self.out_proj(x))
 
 
@@ -230,8 +255,9 @@ class Anima(MiniTrainDIT):
             return text_embeds
 
     def enable_gradient_checkpointing(self, *args, **kwargs):
-        del args, kwargs
-        # Native Anima trainer disables gradient checkpointing for this model.
+        super().enable_gradient_checkpointing(*args, **kwargs)
+        if hasattr(self, "llm_adapter"):
+            self.llm_adapter.gradient_checkpointing = True
         return None
 
     @property

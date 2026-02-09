@@ -78,9 +78,9 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             getattr(args, "cache_text_encoder_outputs_to_disk", False)
         ):
             raise ValueError("Anima native trainer currently does not support cache_text_encoder_outputs.")
-        if bool(getattr(args, "gradient_checkpointing", False)):
-            logger.warning("Anima transformer does not support gradient checkpointing, forcing it off.")
-            args.gradient_checkpointing = False
+        if not bool(getattr(args, "gradient_checkpointing", False)):
+            logger.info("Anima native trainer forces gradient_checkpointing=true.")
+        args.gradient_checkpointing = True
 
         optimizer_type = str(getattr(args, "optimizer_type", "") or "").strip().lower()
         if optimizer_type == "radam_schedulefree":

@@ -1267,6 +1267,8 @@ class MiniTrainDIT(nn.Module):
         self.extra_t_extrapolation_ratio = extra_t_extrapolation_ratio
         self.rope_enable_fps_modulation = rope_enable_fps_modulation
         self.cuda_graphs = {}
+        self.gradient_checkpointing = False
+        self.gradient_checkpointing_cpu_offload = False
 
         self.build_patch_embed()
         self.build_pos_embed()
@@ -1304,6 +1306,14 @@ class MiniTrainDIT(nn.Module):
 
         self.t_embedding_norm = RMSNorm(model_channels, eps=1e-6)
         self.init_weights()
+
+    def enable_gradient_checkpointing(self, *args, **kwargs):
+        cpu_offload = bool(kwargs.get("cpu_offload", False))
+        if len(args) > 0:
+            cpu_offload = bool(args[0])
+        self.gradient_checkpointing = True
+        self.gradient_checkpointing_cpu_offload = cpu_offload
+        return None
 
     def init_weights(self) -> None:
         self.x_embedder.init_weights()
@@ -1499,13 +1509,28 @@ class MiniTrainDIT(nn.Module):
             "adaln_lora_B_T_3D": adaln_lora_B_T_3D,
             "extra_per_block_pos_emb": extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D,
         }
-        for block in blocks:
-            x_B_T_H_W_D = block(
-                x_B_T_H_W_D,
-                t_embedding_B_T_D,
-                crossattn_emb,
-                **block_kwargs,
-            )
+        use_grad_checkpointing = bool(getattr(self, "gradient_checkpointing", False)) and self.training
+        if use_grad_checkpointing:
+            from torch.utils.checkpoint import checkpoint
+
+            for block in blocks:
+                def custom_forward(hidden_states, blk=block):
+                    return blk(
+                        hidden_states,
+                        t_embedding_B_T_D,
+                        crossattn_emb,
+                        **block_kwargs,
+                    )
+
+                x_B_T_H_W_D = checkpoint(custom_forward, x_B_T_H_W_D, use_reentrant=False)
+        else:
+            for block in blocks:
+                x_B_T_H_W_D = block(
+                    x_B_T_H_W_D,
+                    t_embedding_B_T_D,
+                    crossattn_emb,
+                    **block_kwargs,
+                )
 
         x_B_T_H_W_O = self.final_layer(x_B_T_H_W_D, t_embedding_B_T_D, adaln_lora_B_T_3D=adaln_lora_B_T_3D)
         x_B_C_Tt_Hp_Wp = self.unpatchify(x_B_T_H_W_O)

@@ -78,13 +78,13 @@ def test_assert_extra_args_is_robust_when_optional_cache_flags_missing():
     trainer.assert_extra_args(args, _DummyDatasetGroup(), None)
 
 
-def test_assert_extra_args_disables_gradient_checkpointing():
+def test_assert_extra_args_forces_gradient_checkpointing_enabled():
     native_entry = import_native_entry()
     _parser, args = _build_minimal_args()
-    args.gradient_checkpointing = True
+    args.gradient_checkpointing = False
     trainer = native_entry.AnimaNetworkTrainer()
     trainer.assert_extra_args(args, _DummyDatasetGroup(), None)
-    assert args.gradient_checkpointing is False
+    assert args.gradient_checkpointing is True
 
 
 def test_assert_extra_args_rejects_schedulefree_with_warmup_ratio():
