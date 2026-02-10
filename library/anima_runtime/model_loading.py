@@ -20,6 +20,7 @@ T5_DEFAULT_REVISION = "main"
 T5_MODELSCOPE_FALLBACK_REPO_ID = "nv-community/Cosmos-Predict2-2B-Text2Image"
 T5_MODELSCOPE_FALLBACK_REVISION = "master"
 T5_MODELSCOPE_FALLBACK_SUBFOLDER = "tokenizer"
+ANIMA_IGNORABLE_UNEXPECTED_KEY_SUFFIXES = (".comfy_quant",)
 
 
 @dataclass
@@ -176,18 +177,44 @@ def load_config_from_ckpt(ckpt_path: str | Path):
     )
 
 
-def load_state_dict(path: str | Path):
+def _normalize_anima_state_key(raw_key: str) -> str:
+    mapped_key = str(raw_key)
+    if mapped_key.startswith("net."):
+        mapped_key = mapped_key[len("net.") :]
+    if mapped_key.startswith("diffusion_model."):
+        mapped_key = mapped_key[len("diffusion_model.") :]
+    return mapped_key
+
+
+def _is_ignorable_anima_state_key(key: str) -> bool:
+    normalized = _normalize_anima_state_key(key)
+    return any(normalized.endswith(suffix) for suffix in ANIMA_IGNORABLE_UNEXPECTED_KEY_SUFFIXES)
+
+
+def load_state_dict(path: str | Path, *, return_filter_stats: bool = False):
     from safetensors import safe_open
 
     state_dict = {}
+    filtered_keys_count = 0
+    filtered_key_samples = []
     with safe_open(str(path), framework="pt", device="cpu") as handle:
         for key in handle.keys():
-            mapped_key = key
-            if mapped_key.startswith("net."):
-                mapped_key = mapped_key[len("net.") :]
-            if mapped_key.startswith("diffusion_model."):
-                mapped_key = mapped_key[len("diffusion_model.") :]
+            mapped_key = _normalize_anima_state_key(key)
+            if _is_ignorable_anima_state_key(mapped_key):
+                filtered_keys_count += 1
+                if len(filtered_key_samples) < 3:
+                    filtered_key_samples.append(mapped_key)
+                continue
             state_dict[mapped_key] = handle.get_tensor(key)
+    if filtered_keys_count > 0:
+        LOGGER.info(
+            "Filtered %d ignorable Anima state keys while loading %s (examples=%s)",
+            filtered_keys_count,
+            path,
+            filtered_key_samples,
+        )
+    if return_filter_stats:
+        return state_dict, {"filtered_count": filtered_keys_count, "filtered_samples": filtered_key_samples}
     return state_dict
 
 
@@ -196,13 +223,25 @@ def load_anima_model(ckpt_path, device, dtype, *, attention_backend: str = "torc
     config = load_config_from_ckpt(ckpt_path)
     config["atten_backend"] = str(attention_backend or "torch")
     model = Anima(**config)
-    state_dict = load_state_dict(ckpt_path)
+    state_dict, filter_stats = load_state_dict(ckpt_path, return_filter_stats=True)
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    if missing or unexpected:
+    ignorable_unexpected = [key for key in unexpected if _is_ignorable_anima_state_key(key)]
+    real_unexpected = [key for key in unexpected if not _is_ignorable_anima_state_key(key)]
+
+    if missing or real_unexpected:
         LOGGER.warning(
-            "Anima model state mismatch: missing=%d unexpected=%d",
+            "Anima model state mismatch: missing=%d unexpected=%d ignored_unexpected=%d",
             len(missing),
-            len(unexpected),
+            len(real_unexpected),
+            len(ignorable_unexpected),
+        )
+        if real_unexpected:
+            LOGGER.warning("Anima model real unexpected keys sample: %s", real_unexpected[:3])
+    elif ignorable_unexpected or int(filter_stats.get("filtered_count", 0)) > 0:
+        LOGGER.info(
+            "Anima model state loaded with ignored quantization aux keys: filtered=%d ignored_unexpected=%d",
+            int(filter_stats.get("filtered_count", 0)),
+            len(ignorable_unexpected),
         )
     model = model.to(device=device, dtype=dtype)
     return model
