@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
+import re
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -28,6 +30,48 @@ import logging
 logger = logging.getLogger(__name__)
 
 SUPPORTED_NETWORK_MODULES = ("networks.lora_anima", "networks.lokr_anima")
+
+
+def _sanitize_log_component(name: str) -> str:
+    text = str(name or "").strip()
+    if not text:
+        return "train"
+    sanitized = re.sub(r"[^0-9A-Za-z._-]+", "_", text)
+    sanitized = re.sub(r"_+", "_", sanitized).strip("._-")
+    return sanitized or "train"
+
+
+def _is_xformers_available() -> bool:
+    try:
+        import xformers.ops  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def apply_anima_runtime_defaults(args):
+    if not str(getattr(args, "log_with", "") or "").strip():
+        args.log_with = "tensorboard"
+
+    logging_dir = str(getattr(args, "logging_dir", "") or "").strip()
+    if not logging_dir:
+        output_dir = str(getattr(args, "output_dir", "") or "").strip()
+        args.logging_dir = os.path.join(output_dir, "logs") if output_dir else "logs"
+
+    log_prefix = str(getattr(args, "log_prefix", "") or "").strip()
+    if not log_prefix:
+        experiment_name = _sanitize_log_component(str(getattr(args, "output_name", "") or "train"))
+        # Detailed timestamp is appended in train_util.prepare_accelerator; keep prefix as experiment name.
+        args.log_prefix = f"{experiment_name}_"
+
+    legacy_xfomers = getattr(args, "xfomers", None)
+    if legacy_xfomers is True:
+        args.xformers = True
+    elif legacy_xfomers is False and hasattr(args, "xformers"):
+        args.xformers = False
+
+    return args
 
 
 def _upsert_network_arg(args, key: str, value: str):
@@ -175,6 +219,23 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         if not bool(getattr(args, "gradient_checkpointing", False)):
             logger.info("Anima native trainer forces gradient_checkpointing=true.")
         args.gradient_checkpointing = True
+
+        requested_backend = str(getattr(args, "anima_attention_backend", "torch") or "torch").strip().lower()
+        if bool(getattr(args, "xformers", False)):
+            requested_backend = "xformers"
+        if requested_backend not in {"torch", "xformers"}:
+            raise ValueError(f"Unsupported Anima attention backend: {requested_backend}")
+
+        if requested_backend == "xformers":
+            if _is_xformers_available():
+                args.anima_attention_backend = "xformers"
+                args.xformers = True
+            else:
+                logger.warning("xformers requested but not available; falling back to torch attention backend.")
+                args.anima_attention_backend = "torch"
+                args.xformers = False
+        else:
+            args.anima_attention_backend = "torch"
 
         optimizer_type = str(getattr(args, "optimizer_type", "") or "").strip().lower()
         if optimizer_type == "radam_schedulefree":
@@ -552,6 +613,13 @@ def setup_parser() -> argparse.ArgumentParser:
         choices=["torch", "xformers"],
         help="Attention backend for Anima transformer.",
     )
+    if "--xfomers" not in parser._option_string_actions:
+        parser.add_argument(
+            "--xfomers",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help=argparse.SUPPRESS,
+        )
     parser.add_argument("--anima_seq_len", type=int, default=512, help="Text sequence length for Qwen/T5 tokenization.")
     parser.add_argument(
         "--anima_timestep_sampling",
@@ -609,6 +677,7 @@ if __name__ == "__main__":
     train_util.verify_command_line_training_args(args)
     args = train_util.read_config_from_file(args, parser)
     args = normalize_optimizer_aliases(args)
+    args = apply_anima_runtime_defaults(args)
     args = apply_anima_network_defaults(args)
 
     trainer = AnimaNetworkTrainer()

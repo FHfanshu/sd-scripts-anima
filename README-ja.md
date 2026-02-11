@@ -98,6 +98,8 @@ Stable Diffusion等の画像生成モデルの学習、モデルによる画像�
   * T5 tokenizer の必須ファイル不足時は起動時に自動ダウンロード（HF優先、失敗時はModelScopeへ自動フォールバック）
   * `--t5_tokenizer_validate_strict` で tokenizer の厳格検証を有効化可能
   * `--anima_monitor_*` で学習時のVRAM/告警メトリクスを記録可能
+  * TensorBoard ログはデフォルト有効。ログ保存先は既定で `<output_dir>/logs`、実行ディレクトリ名は `<output_name>_YYYYMMDD_HHMMSS_ffffff`
+  * `--xformers` は Anima の attention backend 選択に完全連動（xformers 非対応環境では自動で `torch` にフォールバック）
   * 旧設定の移行ツール: `tools/convert_anima_root_to_kohya.py`
 * [Fine-tuning](./docs/fine_tune.md)
 * [Textual Inversion学習](./docs/train_textual_inversion.md)

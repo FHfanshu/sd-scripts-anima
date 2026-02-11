@@ -5429,35 +5429,33 @@ def prepare_accelerator(args: argparse.Namespace):
     """
     this function also prepares deepspeed plugin
     """
-
+    experiment_name = getattr(args, "output_name", None) or "train"
     if args.logging_dir is None:
-        logging_dir = None
+        output_dir = getattr(args, "output_dir", None)
+        base_logging_dir = os.path.join(output_dir, "logs") if output_dir else "logs"
     else:
-        log_prefix = "" if args.log_prefix is None else args.log_prefix
-        logging_dir = args.logging_dir + "/" + log_prefix + time.strftime("%Y%m%d%H%M%S", time.localtime())
+        base_logging_dir = args.logging_dir
+
+    detailed_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    log_prefix = args.log_prefix if args.log_prefix is not None else f"{experiment_name}_"
+    logging_dir = os.path.join(base_logging_dir, f"{log_prefix}{detailed_ts}")
 
     if args.log_with is None:
-        if logging_dir is not None:
-            log_with = "tensorboard"
-        else:
-            log_with = None
+        log_with = "tensorboard"
     else:
         log_with = args.log_with
-        if log_with in ["tensorboard", "all"]:
-            if logging_dir is None:
-                raise ValueError(
-                    "logging_dir is required when log_with is tensorboard / Tensorboardを使う場合、logging_dirを指定してください"
-                )
-        if log_with in ["wandb", "all"]:
-            try:
-                import wandb
-            except ImportError:
-                raise ImportError("No wandb / wandb がインストールされていないようです")
-            if logging_dir is not None:
-                os.makedirs(logging_dir, exist_ok=True)
-                os.environ["WANDB_DIR"] = logging_dir
-            if args.wandb_api_key is not None:
-                wandb.login(key=args.wandb_api_key)
+    if log_with in ["tensorboard", "all"] and logging_dir is None:
+        raise ValueError("logging_dir is required when log_with is tensorboard / Tensorboardを使う場合、logging_dirを指定してください")
+    if log_with in ["wandb", "all"]:
+        try:
+            import wandb
+        except ImportError:
+            raise ImportError("No wandb / wandb がインストールされていないようです")
+        if logging_dir is not None:
+            os.makedirs(logging_dir, exist_ok=True)
+            os.environ["WANDB_DIR"] = logging_dir
+        if args.wandb_api_key is not None:
+            wandb.login(key=args.wandb_api_key)
 
     # torch.compile のオプション。 NO の場合は torch.compile は使わない
     dynamo_backend = "NO"

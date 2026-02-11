@@ -154,3 +154,46 @@ def test_lokr_network_dim_full_matrix_sentinel():
         unet,
     )
     assert network_small.lokr_full_matrix is False
+
+
+def test_lora_alpha_is_restored_from_weights(tmp_path: Path):
+    unet = DummyAnimaTransformer()
+    network = lora_anima.create_network(1.0, 4, 1.0, None, None, unet)
+    network.apply_to(None, unet, False, True)
+
+    layer_name, layer = next(iter(network.injected_layers.items()))
+    layer.adapter.set_alpha(16.0)
+    ckpt = tmp_path / "lora_alpha.safetensors"
+    network.save_weights(str(ckpt), torch.float32, metadata={"test": "alpha"})
+
+    unet2 = DummyAnimaTransformer()
+    network2 = lora_anima.create_network(1.0, 4, 1.0, None, None, unet2)
+    network2.apply_to(None, unet2, False, True)
+    baseline_scaling = network2.injected_layers[layer_name].adapter.scaling
+    network2.load_weights(str(ckpt))
+    loaded_scaling = network2.injected_layers[layer_name].adapter.scaling
+
+    assert baseline_scaling == 0.25
+    assert loaded_scaling == 4.0
+
+
+def test_lokr_alpha_is_restored_from_weights(tmp_path: Path):
+    unet = DummyAnimaTransformer()
+    # Use dim=1 so LoKr is not in the full-direct path where scaling is intentionally forced to 1.0.
+    network = lokr_anima.create_network(1.0, 1, 1.0, None, None, unet)
+    network.apply_to(None, unet, False, True)
+
+    layer_name, layer = next(iter(network.injected_layers.items()))
+    layer.adapter.set_alpha(16.0)
+    ckpt = tmp_path / "lokr_alpha.safetensors"
+    network.save_weights(str(ckpt), torch.float32, metadata={"test": "alpha"})
+
+    unet2 = DummyAnimaTransformer()
+    network2 = lokr_anima.create_network(1.0, 1, 1.0, None, None, unet2)
+    network2.apply_to(None, unet2, False, True)
+    baseline_scaling = network2.injected_layers[layer_name].adapter.scaling
+    network2.load_weights(str(ckpt))
+    loaded_scaling = network2.injected_layers[layer_name].adapter.scaling
+
+    assert baseline_scaling == 1.0
+    assert loaded_scaling == 16.0

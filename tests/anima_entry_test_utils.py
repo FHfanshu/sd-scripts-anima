@@ -104,8 +104,14 @@ def _build_stub_train_network_module() -> types.ModuleType:
         parser.add_argument("--gradient_checkpointing", action="store_true")
         parser.add_argument("--max_data_loader_n_workers", type=int, default=0)
         parser.add_argument("--xformers", action="store_true")
+        parser.add_argument("--xfomers", action="store_true")
+        parser.add_argument("--mem_eff_attn", action="store_true")
+        parser.add_argument("--sdpa", action="store_true")
         parser.add_argument("--seed", type=int, default=None)
         parser.add_argument("--caption_extension", type=str, default=".txt")
+        parser.add_argument("--logging_dir", type=str, default=None)
+        parser.add_argument("--log_with", type=str, default=None)
+        parser.add_argument("--log_prefix", type=str, default=None)
         return parser
 
     module.NetworkTrainer = _NetworkTrainer

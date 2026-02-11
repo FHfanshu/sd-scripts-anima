@@ -241,3 +241,101 @@
 - 验证：
   - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_t5_auto_download.py tests/test_anima_resume_snapshot.py tests/test_anima_monitoring.py tests/test_anima_network_modules.py tests/test_anima_process_batch.py tests/test_anima_config_converter.py tests/test_scheduler_num_cycles_float.py`
   - 结果：`43 passed`。
+
+## 2026-02-11
+
+- 读取并遵循 `AGENTS.md`、`.ai/claude.prompt.md`、`.ai/context/01-overview.md`。
+- 对比分析 ComfyUI 两个 Anima LoKr 权重：
+  - `E:\AI\ComfyUI\models\loras\anima\zxiong\e50\newzx-anima-lokr.safetensors`
+  - `E:\AI\ComfyUI\models\loras\anima\3in1\DragonOCs-anima-lokr.safetensors`
+- 关键结论：
+  - 两者均为 Comfy 前缀键（`diffusion_model.*`），目标模块覆盖总体一致。
+  - `newzx` 为 `networks.lokr_anima` 导出，启用 `train_norm=true`，且为 full-matrix 形态（存在 `.lokr_w2`，无 `.lokr_w2_b`）。
+  - `DragonOCs` 为 `lycoris.kohya` 导出（`algo=lokr, full_matrix=true`）。
+  - `newzx` metadata 显示实际训练总步数 `ss_steps=300`（`ss_epoch=50`，`batch=6`，`grad_accum=6`）。
+  - 权重强度对比：`newzx` 的 `lokr_w2` 平均绝对值约 `0.00063`，`DragonOCs` 约 `0.00161`，前者约为后者 `39%`，整体更弱；`newzx` 另含 norm 差分键（`w_norm/b_norm`）。
+- 结论用于答复用户“为什么一个能吐原图、一个不能”：更可能是训练步数/有效更新不足与权重强度偏弱叠加所致，而非基础键格式不兼容。
+- 复核 `anima_train_network.py` 当前网络加载约束：`SUPPORTED_NETWORK_MODULES=("networks.lora_anima", "networks.lokr_anima")`，默认回落为 `networks.lora_anima`，不接受 `lycoris.kohya` 作为训练入口模块。
+- 结论：当前 `sd-scripts-anima` 训练脚本使用本仓 Anima 适配实现（内置 LoRA/LoKr 注入），并非直接依赖 LyCORIS 训练实现；但导出权重仍兼容常见 LoKr 语义（含 full-matrix sentinel 行为）。
+- 按“参考 LyCORIS 实现但保持键名与训练层不变”完成网络实现细化：
+  - 修改 `networks/_anima_adapter_common.py`：
+    - 为 `_LoRALayer` / `_LoKrLayer` 增加 `set_alpha(...)`，支持从权重 `.alpha` 回读并即时更新缩放。
+    - `_LoKrLayer` 的 rank dropout 改为按 rank 维度掩码并进行 `1/(1-p)` 期望缩放补偿，语义更贴近 LyCORIS。
+    - 保持导出键名不变：仍为 `diffusion_model.*`，并继续导出 `.alpha`。
+    - 保持训练层筛选不变：仍由既有 `target_modules` 匹配逻辑决定。
+    - `_load_adapter_state_dict` 新增 `.alpha` 读取并应用到对应 layer adapter（仅行为对齐，不改变键结构）。
+- 新增测试（`tests/test_anima_network_modules.py`）：
+  - `test_lora_alpha_is_restored_from_weights`
+  - `test_lokr_alpha_is_restored_from_weights`
+  - 验证从 safetensors 加载后 `.alpha` 会正确恢复并影响 scaling。
+- 验证：
+  - `python -m pytest -q tests/test_anima_network_modules.py tests/test_anima_comfy_export_keys.py` -> `8 passed`
+  - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_process_batch.py tests/test_anima_t5_auto_download.py` -> `28 passed`
+- 按需求实现“默认 TensorBoard + 实验名日志命名 + xformers 完整支持”：
+  - `anima_train_network.py`
+    - 新增 `apply_anima_runtime_defaults(args)`：
+      - 默认启用 `log_with=tensorboard`；
+      - 默认日志根目录为 `<output_dir>/logs`（无 `output_dir` 时为 `logs`）；
+      - 默认 `log_prefix=<output_name>_`（用于组合“实验名 + 时间戳”目录）；
+      - 兼容历史拼写 `xfomers` 并映射到 `xformers`。
+    - 在 `__main__` 流程中接入 `apply_anima_runtime_defaults(args)`。
+    - 在 `assert_extra_args` 中补齐 xformers backend 选择逻辑：
+      - `--xformers` 强制 `anima_attention_backend=xformers`；
+      - 若 xformers 不可用，自动回退 `torch` 并输出 warning。
+    - 增加 `--xfomers` 兼容参数（若基类未定义时注册，避免冲突）。
+  - `library/train_util.py`
+    - `prepare_accelerator` 改为仓库级默认启用 TensorBoard（未指定 `log_with` 时）。
+    - 默认日志根目录：未传 `logging_dir` 时自动使用 `<output_dir>/logs`（无 `output_dir` 时 `logs`）。
+    - 日志目录命名改为“实验名 + 详细日期”：`<log_prefix><YYYYMMDD_HHMMSS_ffffff>`。
+- 测试更新：
+  - `tests/test_anima_train_network.py`
+    - 新增运行时日志默认值断言；
+    - 新增 `xfomers` 兼容映射断言；
+    - 新增 xformers 可用/不可用时 backend 选择与回退断言（monkeypatch `_is_xformers_available`）。
+  - `tests/anima_entry_test_utils.py`
+    - 补充 stub parser 字段：`logging_dir/log_with/log_prefix/mem_eff_attn/sdpa/xfomers`。
+- 文档同步：
+  - `docs/anima_train_network.md`：新增默认 TensorBoard、日志命名规则、xformers 行为与 `xfomers` 兼容说明。
+  - `README.md` / `README-ja.md`：Anima 条目补充默认日志与 xformers 行为摘要。
+- 验证：
+  - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_process_batch.py tests/test_anima_network_modules.py tests/test_anima_comfy_export_keys.py` -> `31 passed`。
+  - `python -m compileall anima_train_network.py library/train_util.py networks/_anima_adapter_common.py` 通过。
+- 补全 `configs/kieed.toml` 为可调参数模板：
+  - 保留现有 Kieed 训练核心参数并修正输出命名（`output_dir/output_name` 对应 kieed）。
+  - 按模块新增/补齐常用可调项与注释：
+    - T5 自动下载与 strict 校验
+    - LoRA/LoKr（含 `network_args` 示例）
+    - 保存/续训策略（state/steps/epochs）
+    - 学习率调度扩展参数
+    - 运行时与注意力后端（xformers/legacy `xfomers` 说明）
+    - 日志与 tracker（TensorBoard 默认行为说明）
+    - Anima 监控告警参数
+    - 数据增强与 bucket 扩展参数
+- 执行 TOML 语法校验：`toml.load('configs/kieed.toml')` 通过（`58` keys）。
+- 按用户要求重排 `configs/kieed.toml`：
+  - 将常用参数前置（模型路径、T5、数据集、训练核心、网络与输出、性能设置）。
+  - 全量注释改为中英双语（中文 + English）。
+  - 保持现有训练值不变，仅调整组织结构与注释可读性。
+- 语法校验：`toml.load('configs/kieed.toml')` 通过（`58` keys）。
+- 修正 `configs/kieed.toml` 关键配置错误：
+  - `anima_attention_backend` 从 `"xfomers"` 更正为 `"xformers"`（前者不在允许值内，会触发 argparse choices 校验失败）。
+  - 将底部兼容别名 `xfomers = true` 改为注释，避免与 `xformers = true` 重复定义造成混淆。
+- 执行 TOML 校验：`toml.load('configs/kieed.toml')` 通过（`60` keys）。
+- 排查“TensorBoard 在哪里”：
+  - 发现事件文件已生成：
+    - `E:\sd-scripts-anima\output\kieed_e20_bs6\logs\kieed-anima-lokr_20260211_152511_753629\network_train\events.out.tfevents.1770794863.DESKTOP-3090.64924.0`
+  - 发现 TensorBoard 启动失败原因为：`ModuleNotFoundError: No module named 'pkg_resources'`（当前环境 `setuptools==82.0.0` 不再提供该模块）。
+  - 修复：将 venv 中 `setuptools` 降级到 `<81`（安装为 `80.10.2`），随后验证：
+    - `python -m tensorboard.main --version` -> `2.20.0` 成功。
+- 按“最快启动训练”目标重写 README：`README.md` 改为中英双语 Quick Start，聚焦最小可运行路径（安装 -> 数据 -> 配置 -> 启动 -> TensorBoard）。
+- 新增依赖安装向导：`docs/anima_dependency_guide.md`（中英双语，含 Windows/Linux、xformers 可选安装与常见报错处理）。
+- 重写 `docs/anima_train_network.md` 为精简版中英双语说明，保留最小必填参数与高频参数，移除不常用参数说明。
+- 新增精简示例（参考 `configs/kieed.toml` 并去除低频项）：
+  - `configs/examples/anima_quickstart_train_args.toml`
+  - `configs/examples/anima_quickstart_dataset.toml`
+- 语法校验：使用 `tomllib` 解析上述两个示例 TOML，均通过。
+- 对本地剩余改动执行回归验证（xformers/TensorBoard 默认行为与 LoRA/LoKr alpha 加载相关变更）：
+  - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_network_modules.py tests/test_anima_process_batch.py tests/test_anima_t5_auto_download.py tests/test_anima_comfy_export_keys.py tests/test_anima_config_converter.py tests/test_scheduler_num_cycles_float.py tests/test_anima_resume_snapshot.py tests/test_anima_monitoring.py`
+  - 结果：`51 passed`。
+- 执行语法校验：`python -m compileall anima_train_network.py library/train_util.py networks/_anima_adapter_common.py tests/anima_entry_test_utils.py tests/test_anima_network_modules.py tests/test_anima_train_network.py` 通过。
+- 按用户要求提交其余本地改动，`configs/kieed.toml` 继续保持未跟踪且不纳入提交。

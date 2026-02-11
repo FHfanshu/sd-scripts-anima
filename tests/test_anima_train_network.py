@@ -125,6 +125,33 @@ def test_apply_anima_network_defaults_injects_train_norm_arg():
     assert not any(arg == "train_norm=true" for arg in args.network_args)
 
 
+def test_apply_anima_runtime_defaults_enable_tensorboard_with_experiment_prefix():
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.output_dir = "E:/sd-scripts-anima/output/exp1"
+    args.output_name = "newzx-anima-lokr"
+    args.logging_dir = None
+    args.log_with = None
+    args.log_prefix = None
+
+    native_entry.apply_anima_runtime_defaults(args)
+
+    assert args.log_with == "tensorboard"
+    assert str(args.logging_dir).replace("\\", "/").endswith("/output/exp1/logs")
+    assert args.log_prefix == "newzx-anima-lokr_"
+
+
+def test_apply_anima_runtime_defaults_supports_legacy_xfomers_flag():
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.xformers = False
+    args.xfomers = True
+
+    native_entry.apply_anima_runtime_defaults(args)
+
+    assert args.xformers is True
+
+
 def test_parser_t5_modelscope_fallback_default_true():
     native_entry = import_native_entry()
     parser = native_entry.setup_parser()
@@ -181,3 +208,31 @@ def test_parser_anima_monitor_options():
     assert args.anima_monitor_alert_policy == "raise"
     assert args.anima_monitor_memory_warn_ratio == pytest.approx(0.9)
     assert args.anima_monitor_loss_spike_ratio == pytest.approx(2.5)
+
+
+def test_assert_extra_args_xformers_flag_forces_anima_attention_backend(monkeypatch):
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.xformers = True
+    args.anima_attention_backend = "torch"
+
+    monkeypatch.setattr(native_entry, "_is_xformers_available", lambda: True)
+
+    trainer = native_entry.AnimaNetworkTrainer()
+    trainer.assert_extra_args(args, _DummyDatasetGroup(), None)
+    assert args.anima_attention_backend == "xformers"
+    assert args.xformers is True
+
+
+def test_assert_extra_args_xformers_unavailable_falls_back_to_torch(monkeypatch):
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.xformers = True
+    args.anima_attention_backend = "xformers"
+
+    monkeypatch.setattr(native_entry, "_is_xformers_available", lambda: False)
+
+    trainer = native_entry.AnimaNetworkTrainer()
+    trainer.assert_extra_args(args, _DummyDatasetGroup(), None)
+    assert args.anima_attention_backend == "torch"
+    assert args.xformers is False

@@ -100,6 +100,10 @@ class _LoRALayer(torch.nn.Module):
         torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=5**0.5)
         torch.nn.init.zeros_(self.lora_up.weight)
 
+    def set_alpha(self, value: float):
+        self.alpha = float(value)
+        self.scaling = self.alpha / float(self.rank)
+
     def forward(self, x):
         return self.lora_up(self.dropout(self.lora_down(x))) * self.scaling
 
@@ -157,6 +161,13 @@ class _LoKrLayer(torch.nn.Module):
             self.lokr_w2_b = torch.nn.Parameter(torch.zeros(self.rank, self.in_n))
             torch.nn.init.kaiming_uniform_(self.lokr_w2_a, a=5**0.5)
 
+    def set_alpha(self, value: float):
+        self.alpha = float(value)
+        effective_alpha = self.alpha if self.alpha != 0 else float(self.rank)
+        if self.w1_direct and self.w2_direct:
+            effective_alpha = float(self.rank)
+        self.scaling = effective_alpha / float(self.rank)
+
     def _w1(self):
         if self.w1_direct:
             return self.lokr_w1
@@ -167,14 +178,39 @@ class _LoKrLayer(torch.nn.Module):
             return self.lokr_w2
         return self.lokr_w2_a @ self.lokr_w2_b
 
+    def _rank_mask(self, *, device: torch.device, dtype: torch.dtype) -> Optional[torch.Tensor]:
+        if not self.training or self.rank_dropout <= 0:
+            return None
+        keep_prob = 1.0 - self.rank_dropout
+        if keep_prob <= 0:
+            return torch.zeros(self.rank, device=device, dtype=dtype)
+        mask = (torch.rand(self.rank, device=device) < keep_prob).to(dtype)
+        # Keep expected update scale consistent with LyCORIS rank dropout semantics.
+        return mask / keep_prob
+
     def forward(self, x):
         if self.training and self.module_dropout > 0 and torch.rand(()) < self.module_dropout:
             return torch.zeros((*x.shape[:-1], self.out_features), device=x.device, dtype=x.dtype)
-        diff = torch.kron(self._w1(), self._w2()).reshape(self.out_features, self.in_features) * self.scaling
+        if self.w1_direct:
+            w1 = self.lokr_w1
+        else:
+            rank_mask = self._rank_mask(device=self.lokr_w1_a.device, dtype=self.lokr_w1_a.dtype)
+            if rank_mask is None:
+                w1 = self.lokr_w1_a @ self.lokr_w1_b
+            else:
+                w1 = (self.lokr_w1_a * rank_mask[None, :]) @ self.lokr_w1_b
+
+        if self.w2_direct:
+            w2 = self.lokr_w2
+        else:
+            rank_mask = self._rank_mask(device=self.lokr_w2_a.device, dtype=self.lokr_w2_a.dtype)
+            if rank_mask is None:
+                w2 = self.lokr_w2_a @ self.lokr_w2_b
+            else:
+                w2 = (self.lokr_w2_a * rank_mask[None, :]) @ self.lokr_w2_b
+
+        diff = torch.kron(w1, w2).reshape(self.out_features, self.in_features) * self.scaling
         diff = diff.to(device=x.device, dtype=x.dtype)
-        if self.training and self.rank_dropout > 0:
-            mask = (torch.rand(diff.shape[0], device=diff.device) > self.rank_dropout).to(diff.dtype)
-            diff = diff * mask[:, None]
         return F.linear(x, diff)
 
 
@@ -519,19 +555,26 @@ class AnimaAdapterNetwork(torch.nn.Module):
 
     def _load_adapter_state_dict(self, weights_sd: Dict[str, torch.Tensor], strict: bool = True):
         expected = {}
+        alpha_expected = {}
         for name, layer in self.injected_layers.items():
             for key, tensor in self._state_pairs(name, layer):
                 if key.endswith(".alpha"):
+                    alpha_expected[key] = layer
                     continue
                 expected[key] = tensor
 
         normalized = {}
+        alpha_values: Dict[str, torch.Tensor] = {}
         unexpected = []
         for raw_key, value in weights_sd.items():
             internal_key = self._to_internal_adapter_key(raw_key)
             if internal_key is None:
                 continue
             if internal_key.endswith(".alpha"):
+                if internal_key in alpha_expected:
+                    alpha_values[internal_key] = value
+                else:
+                    unexpected.append(str(raw_key))
                 continue
             if internal_key in expected:
                 normalized[internal_key] = value
@@ -543,6 +586,15 @@ class AnimaAdapterNetwork(torch.nn.Module):
             if k not in normalized:
                 continue
             p.data.copy_(normalized[k].to(device=p.device, dtype=p.dtype))
+
+        for alpha_key, layer in alpha_expected.items():
+            if alpha_key not in alpha_values:
+                continue
+            alpha_tensor = alpha_values[alpha_key]
+            alpha_value = float(alpha_tensor.detach().float().reshape(-1)[0].item())
+            adapter = getattr(layer, "adapter", None)
+            if adapter is not None and hasattr(adapter, "set_alpha"):
+                adapter.set_alpha(alpha_value)
 
         norm_info = self._load_norm_state_dict(weights_sd)
         missing_all = missing + norm_info["missing"]
