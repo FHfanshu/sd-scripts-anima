@@ -1,0 +1,19 @@
+# Quickstart dataset config (common parameters only)
+# 快速启动数据集配置（仅保留常用项）
+
+[general]
+shuffle_caption = true
+caption_extension = ".txt"
+keep_tokens = 0
+
+[[datasets]]
+resolution = 1024
+batch_size = 1
+enable_bucket = true
+min_bucket_reso = 512
+max_bucket_reso = 2048
+bucket_reso_steps = 64
+
+[[datasets.subsets]]
+image_dir = "/path/to/train_images"
+num_repeats = 10

@@ -1,255 +1,202 @@
-# sd-scripts
+# sd-scripts-anima Quick Start / 快速开始
 
-[English](./README.md) / [日本語](./README-ja.md)
+This fork focuses on **Anima (Cosmos-Predict2) LoRA/LoKr training** with a native entrypoint: `anima_train_network.py`.
 
-## Table of Contents
-<details>
-<summary>Click to expand</summary>
+本仓库聚焦 **Anima（Cosmos-Predict2）LoRA/LoKr 训练**，使用原生入口：`anima_train_network.py`。
 
-- [Introduction](#introduction)
-  - [Supported Models](#supported-models)
-  - [Features](#features)
-  - [Sponsors](#sponsors)
-  - [Support the Project](#support-the-project)
-- [Documentation](#documentation)
-  - [Training Documentation (English and Japanese)](#training-documentation-english-and-japanese)
-  - [Other Documentation (English and Japanese)](#other-documentation-english-and-japanese)
-- [For Developers Using AI Coding Agents](#for-developers-using-ai-coding-agents)
-- [Windows Installation](#windows-installation)
-  - [Windows Required Dependencies](#windows-required-dependencies)
-  - [Installation Steps](#installation-steps)
-  - [About requirements.txt and PyTorch](#about-requirementstxt-and-pytorch)
-  - [xformers installation (optional)](#xformers-installation-optional)
-- [Linux/WSL2 Installation](#linuxwsl2-installation)
-  - [DeepSpeed installation (experimental, Linux or WSL2 only)](#deepspeed-installation-experimental-linux-or-wsl2-only)
-- [Upgrade](#upgrade)
-  - [Upgrade PyTorch](#upgrade-pytorch)
-- [Credits](#credits)
-- [License](#license)
+## 中文：最快启动训练
 
-</details>
+### 1. 你需要准备
 
-## Introduction
+- Windows 10/11 或 Linux/WSL2
+- NVIDIA GPU（建议 >= 12GB 显存）
+- Python `3.10.x`
+- Git
 
-This repository contains training, generation and utility scripts for Stable Diffusion and other image generation models.
-
-### Sponsors
-
-We are grateful to the following companies for their generous sponsorship:
-
-<a href="https://aihub.co.jp/top-en">
-  <img src="./images/logo_aihub.png" alt="AiHUB Inc." title="AiHUB Inc." height="100px">
-</a>
-
-### Support the Project
-
-If you find this project helpful, please consider supporting its development via [GitHub Sponsors](https://github.com/sponsors/kohya-ss/). Your support is greatly appreciated!
-
-### Change History
-
-- **Version 0.10.0 (2026-01-19):**
-    - `sd3` branch is merged to `main` branch. From this version, FLUX.1 and SD3/SD3.5 etc. are supported in the `main` branch.
-    - There are still some missing parts in the documentation, so please let us know if you find any issues via Issues etc.
-    - The `sd3` branch will be maintained as a development branch synchronized with `dev` for the time being.
-
-### Supported Models
-
-* **Stable Diffusion 1.x/2.x**
-* **SDXL**
-* **SD3/SD3.5**
-* **FLUX.1**
-* **LUMINA**
-* **HunyuanImage-2.1**
-
-### Features
-
-* LoRA training
-* Fine-tuning (native training, DreamBooth): except for HunyuanImage-2.1
-* Textual Inversion training: SD/SDXL
-* Image generation
-* Other utilities such as model conversion, image tagging, LoRA merging, etc.
-
-## Documentation
-
-### Training Documentation (English and Japanese)
-
-* [LoRA Training Overview](./docs/train_network.md)
-* [Dataset config](./docs/config_README-en.md) / [Japanese version](./docs/config_README-ja.md)
-* [Advanced Training](./docs/train_network_advanced.md)
-* [SDXL Training](./docs/sdxl_train_network.md)
-* [SD3 Training](./docs/sd3_train_network.md)
-* [FLUX.1 Training](./docs/flux_train_network.md)
-* [LUMINA Training](./docs/lumina_train_network.md)
-* [HunyuanImage-2.1 Training](./docs/hunyuan_image_train_network.md)
-* [Anima (Cosmos-Predict2) Training](./docs/anima_train_network.md)
-  * Native entrypoint, no parent-repo bridge dependency
-  * Uses Kohya-native config (`--config_file` + `--dataset_config`), root-style `--config` is removed
-  * LLMAdapter training path is the default; `--t5_tokenizer_dir` is required
-  * `--train_norm` is enabled by default (can be disabled with `--no-train_norm`)
-  * Exports ComfyUI-compatible keys (`diffusion_model.*`) by default
-  * LoKr follows Kohya/LyCORIS full-matrix sentinel semantics (`network_dim >= 100000` forces `lokr_full_matrix=true`)
-  * Recommended resume path is `--resume` state directory for full optimizer/scheduler recovery
-  * Resume state includes `resume_snapshot.json`; mismatched key training args are blocked on restart
-  * Missing T5 tokenizer files are auto-downloaded at startup by default (HF first, then ModelScope fallback)
-  * Optional strict tokenizer checks are available via `--t5_tokenizer_validate_strict`
-  * Step logs can include VRAM/alert metrics with `--anima_monitor_*` options
-  * Migration helper: `tools/convert_anima_root_to_kohya.py`
-* [Fine-tuning](./docs/fine_tune.md)
-* [Textual Inversion Training](./docs/train_textual_inversion.md)
-* [ControlNet-LLLite Training](./docs/train_lllite_README.md) / [Japanese version](./docs/train_lllite_README-ja.md)
-* [Validation](./docs/validation.md)
-* [Masked Loss Training](./docs/masked_loss_README.md) / [Japanese version](./docs/masked_loss_README-ja.md)
-
-### Other Documentation (English and Japanese)
-
-* [Image generation](./docs/gen_img_README.md) / [Japanese version](./docs/gen_img_README-ja.md)
-* [Tagging images with WD14 Tagger](./docs/wd14_tagger_README-en.md) / [Japanese version](./docs/wd14_tagger_README-ja.md)
-
-## For Developers Using AI Coding Agents
-
-This repository provides recommended instructions to help AI agents like Claude and Gemini understand our project context and coding standards.
-
-To use them, you need to opt-in by creating your own configuration file in the project root.
-
-**Quick Setup:**
-
-1.  Create a `CLAUDE.md` and/or `GEMINI.md` file in the project root.
-2.  Add the following line to your `CLAUDE.md` to import the repository's recommended prompt:
-
-    ```markdown
-    @./.ai/claude.prompt.md
-    ```
-
-    or for Gemini:
-
-    ```markdown
-    @./.ai/gemini.prompt.md
-    ```
-
-3.  You can now add your own personal instructions below the import line (e.g., `Always respond in Japanese.`).
-
-This approach ensures that you have full control over the instructions given to your agent while benefiting from the shared project context. Your `CLAUDE.md` and `GEMINI.md` are already listed in `.gitignore`, so they won't be committed to the repository.
-
-## Windows Installation
-
-### Windows Required Dependencies
-
-Python 3.10.x and Git:
-
-- Python 3.10.x: Download Windows installer (64-bit) from https://www.python.org/downloads/windows/
-- git: Download latest installer from https://git-scm.com/download/win
-
-Python 3.11.x, and 3.12.x will work but not tested.
-
-Give unrestricted script access to powershell so venv can work:
-
-- Open an administrator powershell window
-- Type `Set-ExecutionPolicy Unrestricted` and answer A
-- Close admin powershell window
-
-### Installation Steps
-
-Open a regular Powershell terminal and type the following inside:
+### 2. 依赖安装（Windows）
 
 ```powershell
-git clone https://github.com/kohya-ss/sd-scripts.git
-cd sd-scripts
+git clone https://github.com/FHfanshu/sd-scripts-anima.git
+cd sd-scripts-anima
 
 python -m venv venv
 .\venv\Scripts\activate
 
+pip install --upgrade pip setuptools wheel
 pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 pip install --upgrade -r requirements.txt
 
 accelerate config
 ```
 
-If `python -m venv` shows only `python`, change `python` to `py`.
+`accelerate config` 推荐回答：
 
-Note: `bitsandbytes`, `prodigyopt` and `lion-pytorch` are included in the requirements.txt. If you'd like to use another version, please install it manually.
-
-This installation is for CUDA 12.4. If you use a different version of CUDA, please install the appropriate version of PyTorch. For example, if you use CUDA 12.1, please install `pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu121`.
-
-Answers to accelerate config:
-
-```txt
-- This machine
-- No distributed training
-- NO
-- NO
-- NO
-- all
-- fp16
+```text
+This machine
+No distributed training
+NO
+NO
+NO
+all
+bf16 (or fp16)
 ```
 
-If you'd like to use bf16, please answer `bf16` to the last question.
-
-Note: Some user reports ``ValueError: fp16 mixed precision requires a GPU`` is occurred in training. In this case, answer `0` for the 6th question: 
-``What GPU(s) (by id) should be used for training on this machine as a comma-separated list? [all]:`` 
-
-(Single GPU with id `0` will be used.)
-
-## About requirements.txt and PyTorch
-
-The file does not contain requirements for PyTorch. Because the version of PyTorch depends on the environment, it is not included in the file. Please install PyTorch first according to the environment. See installation instructions below.
-
-The scripts are tested with PyTorch 2.6.0. PyTorch 2.6.0 or later is required.
-
-For RTX 50 series GPUs, PyTorch 2.8.0 with CUDA 12.8/12.9 should be used. `requirements.txt` will work with this version.
-
-### xformers installation (optional)
-
-To install xformers, run the following command in your activated virtual environment:
-
-```bash
-pip install xformers --index-url https://download.pytorch.org/whl/cu124
-```
-
-Please change the CUDA version in the URL according to your environment if necessary. xformers may not be available for some GPU architectures.
-
-## Linux/WSL2 Installation
-
-Linux or WSL2 installation steps are almost the same as Windows. Just change `venv\Scripts\activate` to `source venv/bin/activate`.
-
-Note: Please make sure that NVIDIA driver and CUDA toolkit are installed in advance.
-
-### DeepSpeed installation (experimental, Linux or WSL2 only)
-  
-To install DeepSpeed, run the following command in your activated virtual environment:
-
-```bash
-pip install deepspeed==0.16.7 
-```
-
-## Upgrade
-
-When a new release comes out you can upgrade your repo with the following command:
+如果 TensorBoard 报 `No module named 'pkg_resources'`：
 
 ```powershell
-cd sd-scripts
-git pull
-.\venv\Scripts\activate
-pip install --use-pep517 --upgrade -r requirements.txt
+pip install "setuptools<81"
 ```
 
-Once the commands have completed successfully you should be ready to use the new version.
+更完整安装说明见：[`docs/anima_dependency_guide.md`](docs/anima_dependency_guide.md)
 
-### Upgrade PyTorch
+### 3. 准备训练数据
 
-If you want to upgrade PyTorch, you can upgrade it with `pip install` command in [Windows Installation](#windows-installation) section.
+每张图配同名 `.txt` 标注，例如：
 
-## Credits
+```text
+train_images/
+  0001.png
+  0001.txt
+  0002.jpg
+  0002.txt
+```
 
-The implementation for LoRA is based on [cloneofsimo's repo](https://github.com/cloneofsimo/lora). Thank you for great work!
+### 4. 使用最小示例配置（已精简常用参数）
 
-The LoRA expansion to Conv2d 3x3 was initially released by cloneofsimo and its effectiveness was demonstrated at [LoCon](https://github.com/KohakuBlueleaf/LoCon) by KohakuBlueleaf. Thank you so much KohakuBlueleaf!
+示例文件：
 
-## License
+- [`configs/examples/anima_quickstart_train_args.toml`](configs/examples/anima_quickstart_train_args.toml)
+- [`configs/examples/anima_quickstart_dataset.toml`](configs/examples/anima_quickstart_dataset.toml)
 
-The majority of scripts is licensed under ASL 2.0 (including codes from Diffusers, cloneofsimo's and LoCon), however portions of the project are available under separate license terms:
+先把以下路径改成你本机路径：
 
-[Memory Efficient Attention Pytorch](https://github.com/lucidrains/memory-efficient-attention-pytorch): MIT
+- `anima_transformer`
+- `vae`
+- `qwen`
+- `t5_tokenizer_dir`
+- `image_dir`
 
-[bitsandbytes](https://github.com/TimDettmers/bitsandbytes): MIT
+### 5. 启动训练
 
-[BLIP](https://github.com/salesforce/BLIP): BSD-3-Clause
+```powershell
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_train_args.toml --dataset_config configs/examples/anima_quickstart_dataset.toml
+```
+
+### 6. 查看日志（默认 TensorBoard）
+
+```powershell
+tensorboard --logdir output/anima_quickstart/logs
+```
+
+默认日志目录规则：`<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
+
+### 7. 保留的常用参数（示例中已覆盖）
+
+- 模型路径：`anima_transformer`、`vae`、`qwen`、`t5_tokenizer_dir`
+- 训练核心：`max_train_epochs`、`train_batch_size`、`gradient_accumulation_steps`、`learning_rate`
+- 网络：`network_module`、`network_dim`、`network_alpha`
+- 性能：`mixed_precision`、`xformers`、`cache_latents`
+- 输出：`output_dir`、`output_name`、`save_every_n_epochs`
+
+不常用参数（监控阈值、高级 scheduler、大量 network_args 等）已从 quickstart 示例移除。
+
+## English: Fastest Training Start
+
+### 1. Requirements
+
+- Windows 10/11 or Linux/WSL2
+- NVIDIA GPU (recommended >= 12GB VRAM)
+- Python `3.10.x`
+- Git
+
+### 2. Dependency Setup (Windows)
+
+```powershell
+git clone https://github.com/FHfanshu/sd-scripts-anima.git
+cd sd-scripts-anima
+
+python -m venv venv
+.\venv\Scripts\activate
+
+pip install --upgrade pip setuptools wheel
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+pip install --upgrade -r requirements.txt
+
+accelerate config
+```
+
+Recommended `accelerate config` answers:
+
+```text
+This machine
+No distributed training
+NO
+NO
+NO
+all
+bf16 (or fp16)
+```
+
+If TensorBoard fails with `No module named 'pkg_resources'`:
+
+```powershell
+pip install "setuptools<81"
+```
+
+Full install guide: [`docs/anima_dependency_guide.md`](docs/anima_dependency_guide.md)
+
+### 3. Dataset Layout
+
+Use one caption file per image:
+
+```text
+train_images/
+  0001.png
+  0001.txt
+  0002.jpg
+  0002.txt
+```
+
+### 4. Use Minimal Example Configs (common args only)
+
+- [`configs/examples/anima_quickstart_train_args.toml`](configs/examples/anima_quickstart_train_args.toml)
+- [`configs/examples/anima_quickstart_dataset.toml`](configs/examples/anima_quickstart_dataset.toml)
+
+Update these paths first:
+
+- `anima_transformer`
+- `vae`
+- `qwen`
+- `t5_tokenizer_dir`
+- `image_dir`
+
+### 5. Launch Training
+
+```powershell
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_train_args.toml --dataset_config configs/examples/anima_quickstart_dataset.toml
+```
+
+### 6. TensorBoard (enabled by default)
+
+```powershell
+tensorboard --logdir output/anima_quickstart/logs
+```
+
+Default run directory format: `<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
+
+### 7. Common Parameters Kept in the Example
+
+- Model paths: `anima_transformer`, `vae`, `qwen`, `t5_tokenizer_dir`
+- Training core: `max_train_epochs`, `train_batch_size`, `gradient_accumulation_steps`, `learning_rate`
+- Network: `network_module`, `network_dim`, `network_alpha`
+- Performance: `mixed_precision`, `xformers`, `cache_latents`
+- Output: `output_dir`, `output_name`, `save_every_n_epochs`
+
+Less-common options (monitor thresholds, advanced scheduler knobs, large `network_args`, etc.) are intentionally removed from quickstart examples.
+
+## More Docs
+
+- Main Anima doc: [`docs/anima_train_network.md`](docs/anima_train_network.md)
+- Dependency guide: [`docs/anima_dependency_guide.md`](docs/anima_dependency_guide.md)
+- Root-style config migration tool: `tools/convert_anima_root_to_kohya.py`
+

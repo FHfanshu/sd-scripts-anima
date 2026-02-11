@@ -1,0 +1,40 @@
+# Quickstart train args (derived from configs/kieed.toml, keeping only common parameters)
+# 快速启动训练参数（基于 configs/kieed.toml 精简，仅保留常用项）
+
+# Required model paths / 必填模型路径
+anima_transformer = "/path/to/anima_transformer.safetensors"
+pretrained_model_name_or_path = "/path/to/anima_transformer.safetensors"
+vae = "/path/to/qwen_image_vae.safetensors"
+qwen = "/path/to/qwen_text_encoders_dir"
+t5_tokenizer_dir = "/path/to/t5_tokenizer_dir"
+
+# Dataset config / 数据集配置
+dataset_config = "configs/examples/anima_quickstart_dataset.toml"
+
+# Network / 网络
+network_module = "networks.lokr_anima"
+network_dim = 100000
+network_alpha = 100000
+
+# Core training / 训练核心
+max_train_epochs = 10
+train_batch_size = 1
+gradient_accumulation_steps = 1
+learning_rate = 0.0001
+optimizer_type = "AdamW8bit"
+lr_scheduler = "constant"
+lr_warmup_steps = 0
+
+# Performance / 性能
+mixed_precision = "bf16"
+xformers = true
+cache_latents = true
+
+# Output / 输出
+output_dir = "./output/anima_quickstart"
+output_name = "anima-lokr-quickstart"
+save_model_as = "safetensors"
+save_every_n_epochs = 1
+
+# Misc / 其他
+seed = 42

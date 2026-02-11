@@ -1,135 +1,126 @@
-# Anima LoRA / LoKr Training (`sd-scripts-anima`)
+# Anima LoRA/LoKr Training (`anima_train_network.py`)
 
-`anima_train_network.py` 是 `sd-scripts-anima` 内的原生 `NetworkTrainer` 训练入口，不依赖上级目录仓库。
+`anima_train_network.py` is the native Anima training entrypoint in this repo.
 
-## 1. 配置策略（重要）
+`anima_train_network.py` 是本仓库内的 Anima 原生训练入口。
 
-从当前版本开始，Anima 训练入口只支持 Kohya 原生参数体系：
+## 中文
 
-- 训练参数：CLI 直接传参，或 `--config_file <train_args.toml>`
+## 1. 配置模式
+
+- 训练参数：`--config_file <train_args.toml>`
 - 数据集参数：`--dataset_config <dataset.toml>`
-- 训练语义：固定 LLMAdapter 条件链路（`Qwen hidden + T5 ids -> preprocess_text_embeds`）
+- 旧的 root-style `--config` 已移除
 
-旧的 root-style Anima 配置（`[model] / [dataset] / [training] ...`）不再由 `anima_train_network.py` 直接加载。  
-`--config` 参数已移除。
-
-如果你手上是旧 root-style 配置，请先转换：
+如需从旧配置迁移：
 
 ```bash
-python tools/convert_anima_root_to_kohya.py \
-  --input /path/to/old_anima_root.toml \
-  --output_dir /path/to/converted
+python tools/convert_anima_root_to_kohya.py --input old_root.toml --output_dir converted
 ```
 
-将生成：
-
-- `train_args.toml`（用于 `--config_file`）
-- `dataset.toml`（用于 `--dataset_config`）
-
-## 2. 快速启动（Kohya 原生配置）
+## 2. 最小启动命令
 
 ```bash
-accelerate launch anima_train_network.py \
-  --config_file /path/to/train_args.toml \
-  --dataset_config /path/to/dataset.toml
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_train_args.toml --dataset_config configs/examples/anima_quickstart_dataset.toml
 ```
 
-项目内提供了一个 10-step smoke 配置模板：
+## 3. 必填参数（最小）
 
-- `configs/smoke/anima_10steps_train_args.toml`
-- `configs/smoke/anima_dataset.toml`
+- `anima_transformer`（或 `pretrained_model_name_or_path`）
+- `vae`
+- `qwen`
+- `t5_tokenizer_dir`
+- `network_module`（`networks.lora_anima` 或 `networks.lokr_anima`）
+- `output_dir` / `output_name`
 
-示例：
+## 4. 推荐常用参数（保留高频）
+
+- `max_train_epochs`
+- `train_batch_size`
+- `gradient_accumulation_steps`
+- `learning_rate`
+- `lr_scheduler = "constant"`
+- `lr_warmup_steps = 0`
+- `mixed_precision = "bf16"`（或 `fp16`）
+- `xformers = true`
+- `cache_latents = true`
+
+## 5. LoKr 快速规则
+
+- 使用 `network_module = "networks.lokr_anima"`
+- 若 `network_dim >= 100000`，会自动触发 full-matrix sentinel 语义
+- 若只想快速跑通，可改为较小 `network_dim`（例如 `16`）
+
+## 6. 默认行为（无需额外参数）
+
+- 默认启用 TensorBoard 日志
+- 日志根目录默认 `<output_dir>/logs`
+- 日志子目录默认 `<output_name>_YYYYMMDD_HHMMSS_ffffff`
+- `train_norm` 默认开启
+- `t5_tokenizer_dir` 缺文件时默认自动下载补齐（HF 优先，失败后 ModelScope 回退）
+
+## 7. 续训建议
+
+- 完整续训用 `--resume <state_dir>`
+- 只加载网络权重用 `--network_weights <file>`（不是完整断点恢复）
+
+## English
+
+## 1. Config Mode
+
+- Train args: `--config_file <train_args.toml>`
+- Dataset args: `--dataset_config <dataset.toml>`
+- Legacy root-style `--config` is removed
+
+Migration from old config:
 
 ```bash
-accelerate launch anima_train_network.py \
-  --config_file configs/smoke/anima_10steps_train_args.toml \
-  --dataset_config configs/smoke/anima_dataset.toml
+python tools/convert_anima_root_to_kohya.py --input old_root.toml --output_dir converted
 ```
 
-你也可以不使用 `--config_file`，直接传参数：
+## 2. Minimal Launch Command
 
 ```bash
-accelerate launch anima_train_network.py \
-  --network_module networks.lokr_anima \
-  --anima_transformer /path/to/anima_transformer.safetensors \
-  --vae /path/to/anima_vae.safetensors \
-  --qwen /path/to/qwen_model_dir \
-  --t5_tokenizer_dir /path/to/t5_tokenizer_dir \
-  --dataset_config /path/to/dataset.toml \
-  --output_dir /path/to/output \
-  --output_name anima_lokr \
-  --max_train_steps 1000
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_train_args.toml --dataset_config configs/examples/anima_quickstart_dataset.toml
 ```
 
-## 3. 必填参数
+## 3. Required Parameters (minimal)
 
-- `--anima_transformer`（或 `--pretrained_model_name_or_path`）
-- `--vae`
-- `--qwen`
-- `--t5_tokenizer_dir`
-- `--network_module`：`networks.lora_anima` 或 `networks.lokr_anima`
-- `--auto_download_t5_tokenizer`（默认 `true`，启动时缺文件自动下载）
-- `--t5_tokenizer_repo_id`（自动下载源，支持 Hugging Face repo id / Hugging Face URL / ModelScope URL）
-- `--t5_tokenizer_subfolder`（默认 `tokenizer`，用于 Cosmos tokenizer 子目录）
-- `--t5_tokenizer_modelscope_fallback`（默认 `true`，HF 下载失败时自动回退 ModelScope）
-- `--t5_tokenizer_modelscope_repo_id`（默认 `nv-community/Cosmos-Predict2-2B-Text2Image`）
-- `--t5_tokenizer_modelscope_revision`（默认 `master`）
-- `--t5_tokenizer_modelscope_subfolder`（默认 `tokenizer`）
-- `--t5_tokenizer_validate_strict`（默认 `false`，开启后在启动阶段执行 tokenizer 严格结构/id 校验）
-- `--train_norm`（默认 `true`，训练 LayerNorm / RMSNorm 的 weight/bias；可用 `--no-train_norm` 关闭）
-- `--anima_monitor_memory`（默认 `true`，记录 CUDA 显存指标）
-- `--anima_monitor_alert_policy`（`warn|raise`，默认 `warn`）
-- `--anima_monitor_memory_warn_ratio`（默认 `0.95`，reserved/total 超阈值触发显存告警）
-- `--anima_monitor_loss_spike_ratio`（默认 `3.0`，loss 相对上一步放大量阈值）
+- `anima_transformer` (or `pretrained_model_name_or_path`)
+- `vae`
+- `qwen`
+- `t5_tokenizer_dir`
+- `network_module` (`networks.lora_anima` or `networks.lokr_anima`)
+- `output_dir` / `output_name`
 
-## 4. 文本条件训练语义
+## 4. Recommended Common Parameters
 
-训练链路固定为：
+- `max_train_epochs`
+- `train_batch_size`
+- `gradient_accumulation_steps`
+- `learning_rate`
+- `lr_scheduler = "constant"`
+- `lr_warmup_steps = 0`
+- `mixed_precision = "bf16"` (or `fp16`)
+- `xformers = true`
+- `cache_latents = true`
 
-1. `Qwen` 编码得到 hidden states
-2. `AnimaTransformer.preprocess_text_embeds(qwen_hidden, t5_ids)`
-3. 将融合后的条件送入 Anima Transformer 主前向
+## 5. LoKr Quick Rule
 
-即 `T5 tokenizer -> text_ids` 是必经链路。
-当前入口不提供 `dit_only` 之类的无 T5 训练模式。
+- Use `network_module = "networks.lokr_anima"`
+- `network_dim >= 100000` automatically triggers full-matrix sentinel behavior
+- For quick smoke runs, use a smaller `network_dim` (for example `16`)
 
-## 5. 导出格式与续训建议
+## 6. Defaults (no extra flags needed)
 
-- Anima LoRA / LoKr 导出默认使用 ComfyUI 可识别键（`diffusion_model.*`）。
-- 训练范围默认覆盖 `attn + mlp + llm_adapter + norm`。
-- LoKr 采用 Kohya/LyCORIS 的 full-matrix sentinel 语义：当 `network_dim >= 100000` 时，自动强制 `lokr_full_matrix=true`（不改写原始 dim）。
-- 若需要严格断点续训，建议使用 `--resume` 状态目录（包含 optimizer/scheduler/step）。
-- `--resume` 路径下会携带 `resume_snapshot.json`，重启时会校验关键训练参数；若不一致会在启动阶段直接失败并提示差异字段。
-- `--network_weights` 单文件热启动属于权重初始化，不等价于完整断点恢复。
+- TensorBoard logging is enabled by default
+- Default log root: `<output_dir>/logs`
+- Default run dir: `<output_name>_YYYYMMDD_HHMMSS_ffffff`
+- `train_norm` is enabled by default
+- Missing tokenizer files under `t5_tokenizer_dir` are auto-downloaded by default (HF first, ModelScope fallback)
 
-## 6. ScheduleFree 约束
+## 7. Resume Recommendation
 
-当 `optimizer_type=RAdamScheduleFree`（或别名 `radam_schedulefree`）时：
+- Full resume: `--resume <state_dir>`
+- Weight init only: `--network_weights <file>` (not full optimizer/scheduler resume)
 
-- `lr_scheduler` 必须是 `constant`
-- `lr_warmup_steps` 必须是 `0`
-- `lr_warmup_ratio` 必须是 `0`
-
-否则会在参数校验阶段直接报错退出。
-
-## 7. 常见问题
-
-- `T5 tokenizer directory is required`
-  - 必须提供 `--t5_tokenizer_dir`。若目录缺 `config.json`、`spiece.model`、`tokenizer.json`，默认会在训练启动时自动下载补齐。
-  - 自动下载默认先尝试 `--t5_tokenizer_repo_id`（支持 HF repo id / HF URL），失败后自动回退到 ModelScope（可用 `--no-t5_tokenizer_modelscope_fallback` 关闭）。
-  - 如果你不希望联网下载，可设置 `--no-auto_download_t5_tokenizer`，此时缺文件会直接报错。
-
-- `Unsupported network module`
-  - 仅支持 `networks.lora_anima` / `networks.lokr_anima`。
-
-- `image too large, but cropping and bucketing are disabled`
-  - 在 `dataset.toml` 开启 bucket（`enable_bucket=true`）或启用裁剪策略（`random_crop` / `face_crop_aug_range`）。
-
-- `T5 tokenizer strict validation failed`
-  - 开启了 `--t5_tokenizer_validate_strict` 时，会额外校验 tokenizer 的 special token、token id 范围和一次本地 smoke encode。
-  - 如需兼容历史目录或自定义 tokenizer，可先关闭严格模式（`--no-t5_tokenizer_validate_strict`）定位具体问题。
-
-- `Anima monitor alert policy=raise triggered`
-  - 当 `--anima_monitor_alert_policy raise` 且出现 `nonfinite loss` 或显存接近阈值时，训练会主动中止。
-  - 可改为 `warn` 仅记录告警日志，并通过 `--anima_monitor_memory_warn_ratio` 调整阈值。
