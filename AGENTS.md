@@ -408,3 +408,13 @@
 - 追加稳健性修正：`maybe_auto_convert_single_file_config` 在 `--output_config` 场景下直接跳过自动转换，保留原有 `read_config_from_file` 输出配置行为。
 - 新增测试：`test_maybe_auto_convert_single_file_config_skips_when_output_config_enabled`。
 - 回归复测：`pytest` 相关 5 组共 `46 passed`。
+- 按用户要求批量处理外部数据集目录 `E:\lora-scripts-v1.10.0\train\konya_karasue\10_konyakarasue` 的 caption（75 个 `.txt`）：
+  - 统一将角色标签置于开头为 `@konya karasue`（并去重原有 `konya_karasue/konya karasue` 标签）。
+  - 将全部标签中的下划线 `_` 替换为空格。
+- 校验结果：
+  - `files_with_underscore=0`
+  - `files_without_prefix=0`
+- 按用户要求更新 `README.md` 的 TensorBoard 说明：
+  - 删除“训练 + TensorBoard 一键同启”脚本示例。
+  - 改为明确“TensorBoard 需要在另一个终端单独启动”。
+  - 提供固定端口命令与访问地址：`http://127.0.0.1:6006`。

@@ -106,28 +106,13 @@ accelerate launch anima_train_network.py --config_file configs/examples/anima_qu
 该过程在内存中完成，不会写出 `train_args.toml` / `dataset.toml` 中间文件。
 若同时传入 `--dataset_config`，则以 CLI 的 `--dataset_config` 为准，并忽略单文件中的 `[dataset]` 段。
 
-### 6. 一键拉起训练 + TensorBoard（自动端口并打印）
+### 6. 单独启动 TensorBoard（需要另一个终端）
 
 ```powershell
-$logDir = "output/anima_quickstart/logs"
-$tbPort = 6006
-while ($true) {
-  $listener = $null
-  try {
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $tbPort)
-    $listener.Start()
-    $listener.Stop()
-    break
-  } catch {
-    $tbPort++
-  } finally {
-    if ($listener -ne $null) { $listener.Stop() }
-  }
-}
-Start-Process -FilePath ".\\venv\\Scripts\\python.exe" -ArgumentList "-m tensorboard.main --logdir `"$logDir`" --host 127.0.0.1 --port $tbPort" | Out-Null
-Write-Host "TensorBoard: http://127.0.0.1:$tbPort"
-accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
+.\venv\Scripts\python.exe -m tensorboard.main --logdir output/anima_quickstart/logs --host 127.0.0.1 --port 6006
 ```
+
+浏览器访问：`http://127.0.0.1:6006`
 
 默认日志目录规则：`<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
 
@@ -232,28 +217,13 @@ Note: when `--config_file` points to a root-style single TOML (with `[model]` an
 The conversion is performed in memory only (no intermediate `train_args.toml` / `dataset.toml` files are written).
 If both inline `[dataset]` and CLI `--dataset_config` are provided, CLI `--dataset_config` takes precedence.
 
-### 6. Start Training + TensorBoard Together (auto port + printed URL)
+### 6. Start TensorBoard Separately (in another terminal)
 
 ```powershell
-$logDir = "output/anima_quickstart/logs"
-$tbPort = 6006
-while ($true) {
-  $listener = $null
-  try {
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $tbPort)
-    $listener.Start()
-    $listener.Stop()
-    break
-  } catch {
-    $tbPort++
-  } finally {
-    if ($listener -ne $null) { $listener.Stop() }
-  }
-}
-Start-Process -FilePath ".\\venv\\Scripts\\python.exe" -ArgumentList "-m tensorboard.main --logdir `"$logDir`" --host 127.0.0.1 --port $tbPort" | Out-Null
-Write-Host "TensorBoard: http://127.0.0.1:$tbPort"
-accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
+.\venv\Scripts\python.exe -m tensorboard.main --logdir output/anima_quickstart/logs --host 127.0.0.1 --port 6006
 ```
+
+Open in browser: `http://127.0.0.1:6006`
 
 Default run directory format: `<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
 
