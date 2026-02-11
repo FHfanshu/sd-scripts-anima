@@ -65,6 +65,9 @@ def _build_stub_train_network_module() -> types.ModuleType:
     def _setup_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser()
         parser.add_argument("--pretrained_model_name_or_path", type=str, default="")
+        parser.add_argument("--config_file", type=str, default=None)
+        parser.add_argument("--output_config", action="store_true")
+        parser.add_argument("--dataset_config", type=str, default=None)
         parser.add_argument("--vae", type=str, default="")
         parser.add_argument("--network_module", type=str, default=None)
         parser.add_argument("--network_args", type=str, nargs="*", default=None)

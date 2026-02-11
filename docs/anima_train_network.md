@@ -8,9 +8,9 @@
 
 ## 1. 配置模式
 
-- 训练参数：`--config_file <train_args.toml>`
-- 数据集参数：`--dataset_config <dataset.toml>`
-- 旧的 root-style `--config` 已移除
+- 主推荐：单文件 root-style TOML（`[model] [dataset] [training] [lora] [optimizer] [output]`）
+- 兼容模式：`--config_file <train_args.toml>` + `--dataset_config <dataset.toml>`
+- 旧的 root-style `--config` 参数已移除
 
 如需从旧配置迁移：
 
@@ -21,8 +21,12 @@ python tools/convert_anima_root_to_kohya.py --input old_root.toml --output_dir c
 ## 2. 最小启动命令
 
 ```bash
-accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_train_args.toml --dataset_config configs/examples/anima_quickstart_dataset.toml
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
 ```
+
+当 `--config_file` 指向 root-style 单文件时，入口会在内存中自动适配为 Kohya 参数（不生成中间 `train_args.toml` / `dataset.toml` 文件）。
+
+若同时提供 `--dataset_config`，则优先使用 `--dataset_config`，并忽略单文件中的 `[dataset]` 段。
 
 ## 3. 必填参数（最小）
 
@@ -68,9 +72,9 @@ accelerate launch anima_train_network.py --config_file configs/examples/anima_qu
 
 ## 1. Config Mode
 
-- Train args: `--config_file <train_args.toml>`
-- Dataset args: `--dataset_config <dataset.toml>`
-- Legacy root-style `--config` is removed
+- Recommended: single root-style TOML (`[model] [dataset] [training] [lora] [optimizer] [output]`)
+- Compatible mode: `--config_file <train_args.toml>` + `--dataset_config <dataset.toml>`
+- Legacy root-style `--config` flag is removed
 
 Migration from old config:
 
@@ -81,8 +85,12 @@ python tools/convert_anima_root_to_kohya.py --input old_root.toml --output_dir c
 ## 2. Minimal Launch Command
 
 ```bash
-accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_train_args.toml --dataset_config configs/examples/anima_quickstart_dataset.toml
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
 ```
+
+When `--config_file` points to a root-style single TOML, the entrypoint adapts it in memory to Kohya-compatible args (no intermediate `train_args.toml` / `dataset.toml` files are written).
+
+If both inline `[dataset]` and CLI `--dataset_config` are provided, CLI `--dataset_config` takes precedence.
 
 ## 3. Required Parameters (minimal)
 

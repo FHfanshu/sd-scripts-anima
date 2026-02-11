@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests.anima_entry_test_utils import import_native_entry
@@ -150,6 +152,156 @@ def test_apply_anima_runtime_defaults_supports_legacy_xfomers_flag():
     native_entry.apply_anima_runtime_defaults(args)
 
     assert args.xformers is True
+
+
+def test_apply_anima_runtime_defaults_legacy_xfomers_false_does_not_disable_xformers():
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.xformers = True
+    args.xfomers = False
+
+    native_entry.apply_anima_runtime_defaults(args)
+
+    assert args.xformers is True
+
+
+def test_maybe_auto_convert_single_file_config_for_root_style(tmp_path: Path):
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    config_path = tmp_path / "single.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[model]",
+                'transformer_path = "m.safetensors"',
+                'vae_path = "v.safetensors"',
+                'text_encoder_path = "qwen_dir"',
+                't5_tokenizer_dir = "t5_dir"',
+                "",
+                "[dataset]",
+                'data_dir = "/data/train/10_subject"',
+                "repeats = 1",
+                "resolution = 512",
+                "",
+                "[training]",
+                "epochs = 1",
+                "batch_size = 1",
+                "grad_accum = 1",
+                "learning_rate = 0.0001",
+                'mixed_precision = "bf16"',
+                "",
+                "[lora]",
+                'network_type = "lokr"',
+                "lora_rank = 8",
+                "lora_alpha = 8",
+                "",
+                "[optimizer]",
+                'type = "AdamW"',
+                "",
+                "[output]",
+                'output_dir = "./output"',
+                'output_name = "test"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cli_argv = ["--config_file", str(config_path)]
+    args = parser.parse_args(cli_argv)
+
+    converted_args = native_entry.maybe_auto_convert_single_file_config(args, parser=parser, cli_argv=cli_argv)
+
+    assert bool(getattr(converted_args, "_anima_single_file_converted", False))
+    assert isinstance(converted_args.dataset_config, dict)
+    assert "datasets" in converted_args.dataset_config
+    assert str(converted_args.config_file).replace("\\", "/").endswith("/single")
+    assert converted_args.network_module == "networks.lokr_anima"
+
+
+def test_maybe_auto_convert_single_file_config_skips_non_root_style(tmp_path: Path):
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    config_path = tmp_path / "flat.toml"
+    config_path.write_text('anima_transformer = "m.safetensors"\n', encoding="utf-8")
+    cli_argv = ["--config_file", str(config_path)]
+    args = parser.parse_args(cli_argv)
+
+    converted_args = native_entry.maybe_auto_convert_single_file_config(args, parser=parser, cli_argv=cli_argv)
+
+    assert converted_args.config_file == str(config_path)
+    assert converted_args.dataset_config is None
+    assert not bool(getattr(converted_args, "_anima_single_file_converted", False))
+
+
+def test_maybe_auto_convert_single_file_config_skips_when_output_config_enabled(tmp_path: Path):
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    config_path = tmp_path / "single.toml"
+    config_path.write_text(
+        """
+[model]
+transformer_path = "m.safetensors"
+vae_path = "v.safetensors"
+text_encoder_path = "qwen_dir"
+t5_tokenizer_dir = "t5_dir"
+
+[training]
+epochs = 1
+        """.strip(),
+        encoding="utf-8",
+    )
+    cli_argv = ["--config_file", str(config_path), "--output_config"]
+    args = parser.parse_args(cli_argv)
+
+    converted_args = native_entry.maybe_auto_convert_single_file_config(args, parser=parser, cli_argv=cli_argv)
+
+    assert converted_args is args
+    assert not bool(getattr(converted_args, "_anima_single_file_converted", False))
+
+
+def test_maybe_auto_convert_single_file_config_prefers_cli_dataset_config(tmp_path: Path, caplog):
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    config_path = tmp_path / "single.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[model]",
+                'transformer_path = "m.safetensors"',
+                'vae_path = "v.safetensors"',
+                'text_encoder_path = "qwen_dir"',
+                't5_tokenizer_dir = "t5_dir"',
+                "",
+                "[dataset]",
+                'data_dir = "/data/train/10_subject"',
+                "repeats = 1",
+                "",
+                "[training]",
+                "epochs = 1",
+                "batch_size = 1",
+                "grad_accum = 1",
+                "learning_rate = 0.0001",
+                "",
+                "[lora]",
+                'network_type = "lora"',
+                "lora_rank = 8",
+                "lora_alpha = 8",
+                "",
+                "[output]",
+                'output_dir = "./output"',
+                'output_name = "test"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cli_argv = ["--config_file", str(config_path), "--dataset_config", "custom_dataset.toml"]
+    args = parser.parse_args(cli_argv)
+
+    with caplog.at_level("WARNING"):
+        converted_args = native_entry.maybe_auto_convert_single_file_config(args, parser=parser, cli_argv=cli_argv)
+
+    assert bool(getattr(converted_args, "_anima_single_file_converted", False))
+    assert converted_args.dataset_config == "custom_dataset.toml"
+    assert "using --dataset_config and ignoring inline [dataset]" in caplog.text
 
 
 def test_parser_t5_modelscope_fallback_default_true():

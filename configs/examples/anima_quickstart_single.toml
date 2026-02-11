@@ -1,0 +1,55 @@
+# Single-file quickstart config (root-style) for converter
+# 单文件快速启动配置（root-style），用于转换器
+
+[model]
+transformer_path = "/path/to/anima_transformer.safetensors"
+vae_path = "/path/to/qwen_image_vae.safetensors"
+text_encoder_path = "/path/to/qwen_text_encoders_dir"
+t5_tokenizer_dir = "/path/to/t5_tokenizer_dir"
+
+[dataset]
+data_dir = "/path/to/train/10_subject"
+repeats = 10
+resolution = 1024
+min_reso = 512
+max_reso = 2048
+reso_step = 64
+shuffle_caption = true
+caption_extension = ".txt"
+keep_tokens = 0
+flip_augment = false
+cache_latents = true
+
+[training]
+epochs = 10
+batch_size = 1
+grad_accum = 1
+learning_rate = 0.0001
+mixed_precision = "bf16"
+grad_checkpoint = true
+num_workers = 2
+persistent_data_loader_workers = true
+xformers = true
+seed = 42
+seq_len = 256
+noise_offset = 0.0
+lr_scheduler = "constant"
+lr_warmup_steps = 0
+
+[lora]
+network_type = "lokr"
+lora_rank = 100000
+lora_alpha = 100000
+
+[optimizer]
+type = "AdamW8bit"
+weight_decay = 0.01
+eps = 1e-8
+beta1 = 0.9
+beta2 = 0.95
+
+[output]
+output_dir = "./output/anima_quickstart"
+output_name = "anima-lokr-quickstart"
+save_every = 200
+save_state = true

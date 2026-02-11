@@ -339,3 +339,72 @@
   - 结果：`51 passed`。
 - 执行语法校验：`python -m compileall anima_train_network.py library/train_util.py networks/_anima_adapter_common.py tests/anima_entry_test_utils.py tests/test_anima_network_modules.py tests/test_anima_train_network.py` 通过。
 - 按用户要求提交其余本地改动，`configs/kieed.toml` 继续保持未跟踪且不纳入提交。
+- 响应用户问题“为什么 Anima 训练需要 T5 tokenizer + 给出训练路径”并完成代码路径核对：
+  - `anima_train_network.py`：`t5_tokenizer_dir` 为必填，缺失直接报错；训练 batch 缺 `t5_ids` 直接报错；前向使用 `preprocess_text_embeds(qwen_embeds, t5_ids)`。
+  - `library/strategy_anima.py`：tokenize 阶段强制需要 `t5_tokenizer`，并返回 `[qwen_ids, qwen_attention_mask, t5_ids]`；编码策略缺 `t5_input_ids` 直接报错。
+  - `library/anima_runtime/model_loading.py`：`load_t5_tokenizer` 会校验 `config.json/spiece.model/tokenizer.json`，缺文件默认自动下载（HF 优先，失败回退 ModelScope）。
+  - 文档路径确认：`docs/anima_train_network.md` 与 `README.md` 的最小启动命令均为 `accelerate launch anima_train_network.py --config_file ... --dataset_config ...`。
+- 按用户要求调整 README 的 TOML 示例形式：
+  - 将快速开始示例改为“单文件 root-style”流程，新增 `configs/examples/anima_quickstart_single.toml`。
+  - 在 README 中明确展示 `[model]`、`[dataset]`、`[training]`、`[lora]`、`[optimizer]`、`[output]` 分区。
+  - 新增“先转换后训练”步骤：通过 `tools/convert_anima_root_to_kohya.py` 生成 `train_args.toml` 与 `dataset.toml` 后再启动训练。
+- 校验：使用 `tomllib` 成功解析 `configs/examples/anima_quickstart_single.toml`（sections: dataset/lora/model/optimizer/output/training）。
+- 排查“xformers 似乎无法启用”问题并修复：
+  - `anima_train_network.py` 的 `apply_anima_runtime_defaults` 中，兼容别名 `xfomers=false` 会误覆盖 `xformers=true`。
+  - 调整为仅在 `xfomers` 为显式 truthy（`True` 或字符串 true/yes/on/1）时才映射到 `xformers=true`，不再用 false/default 值反向关闭 xformers。
+- 新增测试：`tests/test_anima_train_network.py`
+  - `test_apply_anima_runtime_defaults_legacy_xfomers_false_does_not_disable_xformers`
+  - 覆盖“`xformers=true` 不应被 `xfomers=false` 误关闭”场景。
+- 验证：`python -m pytest -q tests/test_anima_train_network.py` -> `21 passed`。
+- 补充可观测性：在 `AnimaNetworkTrainer.assert_extra_args` 完成 backend 选择后，新增 info 日志输出最终结果：
+  - `Anima attention backend resolved to '<backend>' (xformers=<bool>)`
+  - 用于直接确认训练实际是否启用 xformers。
+- 回归：再次执行 `python -m pytest -q tests/test_anima_train_network.py`，结果 `21 passed`。
+- 根据用户反馈“README 没写单文件示例”，将 `configs/examples/anima_quickstart_single.toml` 前置到 `README.md` 顶部，新增 `Quickstart Files / 快速入口文件` 区块，集中列出单文件模板、转换器与训练入口，提升可见性。
+- 按用户要求更新 README 硬件建议：
+  - 将中文与英文的推荐显存从 `>= 12GB` 调整为 `>= 16GB`。
+- 按用户反馈将 README 的数据集示例改为 Kohya-style：
+  - 中文/英文第 3 节均改为 `train/10_kieed/` 结构示例（图片与同名 `.txt`）。
+  - 增加说明：`dataset.data_dir` 指向 `.../train/10_kieed`，重复次数由 `dataset.repeats` 控制。
+- 同步更新 `configs/examples/anima_quickstart_single.toml`：
+  - `dataset.data_dir` 示例路径改为 `/path/to/train/10_kieed`。
+- 按用户要求移除 README 与示例配置中的指名道姓样例命名：
+  - 将 `10_kieed` 全部替换为中性占位 `10_subject`。
+  - 更新位置：`README.md`（中英数据集示例与 `dataset.data_dir` 说明）、`configs/examples/anima_quickstart_single.toml`（`dataset.data_dir` 示例路径）。
+- 全局校验：目标文件中不再包含 `kieed`/`10_kieed`。
+- 按用户要求将 README 训练流程改为“单文件 TOML 直接拉起”，不再要求手动执行转换脚本：
+  - `accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml`
+  - 文档中注明入口会自动检测 root-style 单文件并自动转换为 Kohya 训练参数与数据集配置。
+- 在 `anima_train_network.py` 增加单文件自动转换能力：
+  - 新增 `maybe_auto_convert_single_file_config(args)`，检测 `config_file` 是否 root-style（含 `[model]` + `[training]`）。
+  - 自动调用 `tools/convert_anima_root_to_kohya.py` 的转换逻辑并生成临时 `train_args.toml` + `dataset.toml`，然后回填 `args.config_file/args.dataset_config`。
+- 修复 `library/train_util.py::read_config_from_file` 在部分 parser 默认值下 `args.config_file=None` 导致 `splitext` 报错的问题，改为稳健分支处理。
+- README 新增“训练 + TensorBoard 一键启动”PowerShell 片段：
+  - 自动探测空闲端口（从 6006 递增）。
+  - 启动 TensorBoard 并在控制台打印 `http://127.0.0.1:<port>`。
+- 新增测试：`tests/test_anima_train_network.py`
+  - `test_maybe_auto_convert_single_file_config_for_root_style`
+  - `test_maybe_auto_convert_single_file_config_skips_non_root_style`
+- 验证：
+  - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_config_converter.py tests/test_anima_t5_auto_download.py` -> `34 passed`
+  - `python -m compileall anima_train_network.py library/train_util.py tests/test_anima_train_network.py` 通过。
+- 按“单文件配置统一”方案完成实现（Anima 入口）：
+  - `anima_train_network.py`：`maybe_auto_convert_single_file_config` 从“临时文件转换”改为“内存内转换”，不再落地 `train_args.toml` / `dataset.toml`。
+  - 自动识别 root-style 单文件（`[model]` + `[training]`）并映射到 Kohya 参数。
+  - 冲突策略落地：若同时提供单文件 `[dataset]` 与 `--dataset_config`，优先使用 CLI 的 `--dataset_config`，并打印 warning。
+  - `__main__` 流程改为：先尝试单文件内存适配；仅在未命中时走 `train_util.read_config_from_file`，保持两文件模式兼容。
+- `library/config_util.py`：`load_user_config` 扩展支持 `dict` 输入（兼容旧有 `str/Path` 文件输入）。
+- `train_network.py`：当 `args.dataset_config` 为 `dict` 时输出可读日志：`Loading dataset config from inline single-file [dataset] section.`。
+- 文档更新：
+  - `README.md`：明确单文件自动内存转换、不落地中间文件；补充 `--dataset_config` 覆盖优先级说明。
+  - `docs/anima_train_network.md`：改为主推单文件 root-style，并说明两文件兼容与覆盖规则。
+- 测试更新：
+  - `tests/anima_entry_test_utils.py`：stub parser 增加 `--config_file/--dataset_config`。
+  - `tests/test_anima_train_network.py`：更新单文件转换断言（`dataset_config` 为 `dict`，不再依赖临时文件）；新增 CLI 覆盖 inline dataset 的 warning 断言。
+  - `tests/test_anima_config_converter.py`：新增 `load_user_config` 支持内联 dict 的测试。
+- 验证：
+  - `python -m pytest -q tests/test_anima_train_network.py tests/test_anima_config_converter.py tests/test_anima_t5_auto_download.py tests/test_anima_process_batch.py tests/test_anima_network_modules.py` -> `45 passed`
+  - `python -m compileall anima_train_network.py library/config_util.py train_network.py tests/test_anima_train_network.py tests/anima_entry_test_utils.py tests/test_anima_config_converter.py` 通过。
+- 追加稳健性修正：`maybe_auto_convert_single_file_config` 在 `--output_config` 场景下直接跳过自动转换，保留原有 `read_config_from_file` 输出配置行为。
+- 新增测试：`test_maybe_auto_convert_single_file_config_skips_when_output_config_enabled`。
+- 回归复测：`pytest` 相关 5 组共 `46 passed`。

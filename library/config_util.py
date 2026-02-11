@@ -672,8 +672,16 @@ def generate_controlnet_subsets_config_by_subdirs(
     return subsets_config
 
 
-def load_user_config(file: str) -> dict:
-    file: Path = Path(file)
+def load_user_config(file_or_dict: Union[str, Path, dict]) -> dict:
+    if isinstance(file_or_dict, dict):
+        return file_or_dict
+
+    if not isinstance(file_or_dict, (str, Path)):
+        raise ValueError(
+            f"dataset config must be a dict or a config file path (json/toml), got: {type(file_or_dict)!r}"
+        )
+
+    file: Path = Path(file_or_dict)
     if not file.is_file():
         raise ValueError(f"file not found / ファイルが見つかりません: {file}")
 

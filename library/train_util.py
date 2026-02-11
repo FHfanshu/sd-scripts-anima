@@ -4755,7 +4755,12 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
 
     config_args = argparse.Namespace(**ignore_nesting_dict)
     args = parser.parse_args(namespace=config_args)
-    args.config_file = os.path.splitext(args.config_file)[0]
+    config_file_value = getattr(args, "config_file", None)
+    if isinstance(config_file_value, str) and config_file_value:
+        args.config_file = os.path.splitext(config_file_value)[0]
+    else:
+        # Keep a stable non-None value for downstream callers even when parser defaults override config_file.
+        args.config_file = os.path.splitext(config_path)[0]
 
     return args
 

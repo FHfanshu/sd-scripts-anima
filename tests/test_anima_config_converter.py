@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import toml
+from library import config_util
 
 
 def _load_converter_module():
@@ -132,3 +133,9 @@ max_steps = 10
             dataset_name="dataset.toml",
             overwrite=False,
         )
+
+
+def test_load_user_config_accepts_inline_dict():
+    inline = {"datasets": [{"subsets": [{"image_dir": "train/10_subject", "num_repeats": 1}]}]}
+    loaded = config_util.load_user_config(inline)
+    assert loaded is inline

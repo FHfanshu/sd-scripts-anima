@@ -4,9 +4,12 @@ import argparse
 import math
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
+import toml
 from accelerate import Accelerator
 from diffusers import DDPMScheduler
 
@@ -50,6 +53,86 @@ def _is_xformers_available() -> bool:
         return False
 
 
+def _resolve_config_toml_path(config_file: str) -> Path:
+    config_text = str(config_file or "").strip()
+    if not config_text:
+        return Path("")
+    if not config_text.lower().endswith(".toml"):
+        config_text = f"{config_text}.toml"
+    return Path(config_text).expanduser().resolve()
+
+
+def _is_root_style_single_config(config_dict: Any) -> bool:
+    if not isinstance(config_dict, dict):
+        return False
+    model_section = config_dict.get("model")
+    training_section = config_dict.get("training")
+    return isinstance(model_section, dict) and isinstance(training_section, dict)
+
+
+def maybe_auto_convert_single_file_config(
+    args,
+    parser: Optional[argparse.ArgumentParser] = None,
+    cli_argv: Optional[List[str]] = None,
+):
+    if bool(getattr(args, "output_config", False)):
+        return args
+
+    config_file = str(getattr(args, "config_file", "") or "").strip()
+    if not config_file:
+        return args
+
+    config_path = _resolve_config_toml_path(config_file)
+    if not str(config_path) or not config_path.exists():
+        return args
+
+    try:
+        config_dict = toml.load(str(config_path))
+    except Exception as exc:
+        logger.warning("Failed to parse config file for single-file auto-conversion check: %s", exc)
+        return args
+
+    if not _is_root_style_single_config(config_dict):
+        return args
+
+    from tools.convert_anima_root_to_kohya import convert_root_to_kohya_dicts
+
+    train_args_dict, dataset_dict, unmapped_keys = convert_root_to_kohya_dicts(
+        config_dict,
+        dataset_filename="__inline_dataset__",
+    )
+    train_args_dict.pop("dataset_config", None)
+
+    if parser is None:
+        converted_args = argparse.Namespace(**vars(args))
+        for key, value in train_args_dict.items():
+            setattr(converted_args, key, value)
+    else:
+        seed_namespace = argparse.Namespace(**train_args_dict)
+        converted_args = parser.parse_args(cli_argv if cli_argv is not None else [], namespace=seed_namespace)
+
+    # Keep metadata/log semantics aligned with train_util.read_config_from_file.
+    converted_args.config_file = str(config_path.with_suffix(""))
+
+    # CLI dataset_config has higher priority than [dataset] in single-file config.
+    cli_dataset_config = getattr(args, "dataset_config", None)
+    if cli_dataset_config is not None:
+        converted_args.dataset_config = cli_dataset_config
+        logger.warning(
+            "Both root-style single-file [dataset] and --dataset_config were provided; "
+            "using --dataset_config and ignoring inline [dataset]."
+        )
+    else:
+        converted_args.dataset_config = dataset_dict
+        logger.info("Using inline dataset config from root-style single TOML [dataset] section.")
+
+    setattr(converted_args, "_anima_single_file_converted", True)
+    logger.info("Detected root-style single TOML config. Auto-converted in-memory to Kohya-compatible arguments.")
+    if unmapped_keys:
+        logger.info("Unmapped root-style keys: %s", ", ".join(unmapped_keys))
+    return converted_args
+
+
 def apply_anima_runtime_defaults(args):
     if not str(getattr(args, "log_with", "") or "").strip():
         args.log_with = "tensorboard"
@@ -66,10 +149,12 @@ def apply_anima_runtime_defaults(args):
         args.log_prefix = f"{experiment_name}_"
 
     legacy_xfomers = getattr(args, "xfomers", None)
+    # Legacy typo alias: only promote explicit truthy value to xformers.
+    # Do not force-disable xformers from a false/default alias value, to avoid accidental overrides.
     if legacy_xfomers is True:
         args.xformers = True
-    elif legacy_xfomers is False and hasattr(args, "xformers"):
-        args.xformers = False
+    elif isinstance(legacy_xfomers, str) and legacy_xfomers.strip().lower() in {"1", "true", "yes", "on"}:
+        args.xformers = True
 
     return args
 
@@ -236,6 +321,11 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
                 args.xformers = False
         else:
             args.anima_attention_backend = "torch"
+        logger.info(
+            "Anima attention backend resolved to '%s' (xformers=%s).",
+            args.anima_attention_backend,
+            bool(getattr(args, "xformers", False)),
+        )
 
         optimizer_type = str(getattr(args, "optimizer_type", "") or "").strip().lower()
         if optimizer_type == "radam_schedulefree":
@@ -671,11 +761,14 @@ def setup_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     parser = setup_parser()
-    args = parser.parse_args()
+    cli_argv = sys.argv[1:]
+    args = parser.parse_args(cli_argv)
     args = normalize_optimizer_aliases(args)
 
+    args = maybe_auto_convert_single_file_config(args, parser=parser, cli_argv=cli_argv)
     train_util.verify_command_line_training_args(args)
-    args = train_util.read_config_from_file(args, parser)
+    if not bool(getattr(args, "_anima_single_file_converted", False)):
+        args = train_util.read_config_from_file(args, parser)
     args = normalize_optimizer_aliases(args)
     args = apply_anima_runtime_defaults(args)
     args = apply_anima_network_defaults(args)
