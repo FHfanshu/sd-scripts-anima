@@ -106,13 +106,24 @@ accelerate launch anima_train_network.py --config_file configs/examples/anima_qu
 该过程在内存中完成，不会写出 `train_args.toml` / `dataset.toml` 中间文件。
 若同时传入 `--dataset_config`，则以 CLI 的 `--dataset_config` 为准，并忽略单文件中的 `[dataset]` 段。
 
-### 6. 一键启动训练 + TensorBoard（同一条命令）
+### 6. 一键启动训练 + TensorBoard（默认自动拉起）
 
 ```powershell
-$port=6006; Start-Process -WindowStyle Minimized -FilePath ".\venv\Scripts\python.exe" -ArgumentList "-m","tensorboard.main","--logdir","output/anima_quickstart/logs","--host","127.0.0.1","--port",$port; Write-Host "TensorBoard: http://127.0.0.1:$port"; .\venv\Scripts\accelerate.exe launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
 ```
 
-如端口被占用，把 `$port=6006` 改为其他端口。
+默认行为：
+
+- 当 `log_with = "tensorboard"`（或 `all`）时，会在训练启动前自动拉起 TensorBoard Web 服务
+- 控制台会打印访问地址，例如：`TensorBoard: http://127.0.0.1:6006`
+- 若 `6006` 被占用，会自动尝试后续可用端口并打印最终端口
+
+可选参数：
+
+- `--tensorboard_host 127.0.0.1`
+- `--tensorboard_port 6006`
+- `--tensorboard_logdir <dir>`（默认使用 `logging_dir`）
+- `--no-auto_start_tensorboard`（关闭自动拉起）
 
 ### 7. 单独启动 TensorBoard（需要另一个终端）
 
@@ -122,7 +133,7 @@ $port=6006; Start-Process -WindowStyle Minimized -FilePath ".\venv\Scripts\pytho
 
 浏览器访问：`http://127.0.0.1:6006`
 
-默认日志目录规则：`<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
+默认日志目录规则：`./logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
 
 ### 8. 保留的常用参数（示例中已覆盖）
 
@@ -225,13 +236,24 @@ Note: when `--config_file` points to a root-style single TOML (with `[model]` an
 The conversion is performed in memory only (no intermediate `train_args.toml` / `dataset.toml` files are written).
 If both inline `[dataset]` and CLI `--dataset_config` are provided, CLI `--dataset_config` takes precedence.
 
-### 6. One-Command Start: Training + TensorBoard
+### 6. One-Command Start: Training + TensorBoard (auto-start by default)
 
 ```powershell
-$port=6006; Start-Process -WindowStyle Minimized -FilePath ".\venv\Scripts\python.exe" -ArgumentList "-m","tensorboard.main","--logdir","output/anima_quickstart/logs","--host","127.0.0.1","--port",$port; Write-Host "TensorBoard: http://127.0.0.1:$port"; .\venv\Scripts\accelerate.exe launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
+accelerate launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
 ```
 
-If the port is occupied, change `$port=6006` to another port.
+Default behavior:
+
+- If `log_with = "tensorboard"` (or `all`), TensorBoard web service is auto-started before training
+- The URL is printed in console, for example: `TensorBoard: http://127.0.0.1:6006`
+- If `6006` is busy, the entrypoint automatically picks the next available port and prints it
+
+Optional flags:
+
+- `--tensorboard_host 127.0.0.1`
+- `--tensorboard_port 6006`
+- `--tensorboard_logdir <dir>` (defaults to `logging_dir`)
+- `--no-auto_start_tensorboard` (disable auto-start)
 
 ### 7. Start TensorBoard Separately (in another terminal)
 
@@ -241,7 +263,7 @@ If the port is occupied, change `$port=6006` to another port.
 
 Open in browser: `http://127.0.0.1:6006`
 
-Default run directory format: `<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
+Default run directory format: `./logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
 
 ### 8. Common Parameters Kept in the Example
 
