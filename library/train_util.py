@@ -4774,9 +4774,41 @@ def resume_from_local_or_hf_if_specified(accelerator, args):
     if not args.resume:
         return
 
+    def _can_ignore_optimizer_mismatch() -> bool:
+        return bool(getattr(args, "resume_ignore_optimizer_mismatch", False))
+
+    def _is_optimizer_group_mismatch_error(exc: Exception) -> bool:
+        text = str(exc or "").lower()
+        return "parameter group" in text and "doesn't match the size of optimizer's group" in text
+
+    def _load_state_with_optional_optimizer_fallback(resume_dir: str):
+        try:
+            accelerator.load_state(resume_dir)
+            return
+        except ValueError as exc:
+            if not (_can_ignore_optimizer_mismatch() and _is_optimizer_group_mismatch_error(exc)):
+                raise
+            logger.warning(
+                "Resume optimizer state mismatch detected; retrying resume without optimizer/scheduler states: %s",
+                exc,
+            )
+
+        saved_optimizers = accelerator._optimizers
+        saved_schedulers = accelerator._schedulers
+        try:
+            accelerator._optimizers = []
+            accelerator._schedulers = []
+            accelerator.load_state(resume_dir)
+            logger.warning(
+                "Resumed without optimizer/scheduler states. Optimizer will restart from current config."
+            )
+        finally:
+            accelerator._optimizers = saved_optimizers
+            accelerator._schedulers = saved_schedulers
+
     if not args.resume_from_huggingface:
         logger.info(f"resume training from local state: {args.resume}")
-        accelerator.load_state(args.resume)
+        _load_state_with_optional_optimizer_fallback(args.resume)
         return
 
     logger.info(f"resume training from huggingface state: {args.resume}")
@@ -4820,7 +4852,7 @@ def resume_from_local_or_hf_if_specified(accelerator, args):
             "No files found in the specified repo id/path/revision / 指定されたリポジトリID/パス/リビジョンにファイルが見つかりませんでした"
         )
     dirname = os.path.dirname(results[0])
-    accelerator.load_state(dirname)
+    _load_state_with_optional_optimizer_fallback(dirname)
 
 
 def get_optimizer(args, trainable_params) -> tuple[str, str, object]:

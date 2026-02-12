@@ -328,6 +328,17 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             "t5_tokenizer_modelscope_subfolder": str(getattr(args, "t5_tokenizer_modelscope_subfolder", "") or ""),
         }
 
+    @staticmethod
+    def _get_resume_snapshot_critical_keys() -> set[str]:
+        # Keep core adapter/topology semantics strict by default.
+        return {
+            "network_module",
+            "network_dim",
+            "network_alpha",
+            "train_norm",
+            "anima_seq_len",
+        }
+
     def build_resume_snapshot(self, args: argparse.Namespace) -> dict:
         return {
             "schema": "anima_resume_snapshot/v1",
@@ -343,18 +354,35 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
             raise ValueError("Invalid resume snapshot: missing fields object.")
 
         expected = self._build_resume_snapshot_fields(args)
-        mismatches = []
+        all_mismatches = []
         for key, expected_value in expected.items():
             if key not in fields:
-                mismatches.append(f"{key}: missing in resume snapshot")
+                all_mismatches.append(f"{key}: missing in resume snapshot")
                 continue
             saved_value = fields.get(key)
             if saved_value != expected_value:
-                mismatches.append(f"{key}: resume={saved_value!r}, current={expected_value!r}")
+                all_mismatches.append(f"{key}: resume={saved_value!r}, current={expected_value!r}")
 
-        if mismatches:
-            details = "; ".join(mismatches)
+        if not all_mismatches:
+            return
+
+        strict = bool(getattr(args, "anima_resume_snapshot_strict", False))
+        if strict:
+            details = "; ".join(all_mismatches)
             raise ValueError(f"Resume snapshot mismatch detected. {details}")
+
+        critical_keys = self._get_resume_snapshot_critical_keys()
+        critical_mismatches = [item for item in all_mismatches if item.split(":", 1)[0] in critical_keys]
+        soft_mismatches = [item for item in all_mismatches if item.split(":", 1)[0] not in critical_keys]
+
+        if soft_mismatches:
+            logger.warning(
+                "Resume snapshot soft mismatch detected (continuing in non-strict mode): %s",
+                "; ".join(soft_mismatches),
+            )
+        if critical_mismatches:
+            details = "; ".join(critical_mismatches)
+            raise ValueError(f"Resume snapshot critical mismatch detected. {details}")
 
     def _collect_memory_monitor_logs(self, accelerator: Accelerator) -> Dict[str, float]:
         args = self._runtime_args
@@ -864,6 +892,18 @@ def setup_parser() -> argparse.ArgumentParser:
         type=float,
         default=3.0,
         help="Loss spike threshold ratio against previous finite step loss.",
+    )
+    parser.add_argument(
+        "--anima_resume_snapshot_strict",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Strictly enforce all resume snapshot fields. Default is non-strict (soft mismatches warn, critical mismatches raise).",
+    )
+    parser.add_argument(
+        "--resume_ignore_optimizer_mismatch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If resume optimizer param-groups mismatch, fallback to loading model state only and reinitialize optimizer/scheduler from current config.",
     )
     parser.add_argument(
         "--auto_start_tensorboard",

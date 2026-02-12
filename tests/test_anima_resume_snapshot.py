@@ -66,3 +66,29 @@ def test_validate_resume_snapshot_raises_on_mismatch():
 
     with pytest.raises(ValueError, match="network_dim"):
         trainer.validate_resume_snapshot(args, tampered)
+
+
+def test_validate_resume_snapshot_soft_mismatch_warns_in_non_strict_mode(caplog):
+    native_entry, args = _build_args()
+    trainer = native_entry.AnimaNetworkTrainer()
+    snapshot = trainer.build_resume_snapshot(args)
+    tampered = copy.deepcopy(snapshot)
+    tampered["fields"]["optimizer_type"] = "RAdamScheduleFree"
+
+    args.anima_resume_snapshot_strict = False
+    with caplog.at_level("WARNING"):
+        trainer.validate_resume_snapshot(args, tampered)
+    assert "soft mismatch detected" in caplog.text
+    assert "optimizer_type" in caplog.text
+
+
+def test_validate_resume_snapshot_soft_mismatch_raises_in_strict_mode():
+    native_entry, args = _build_args()
+    trainer = native_entry.AnimaNetworkTrainer()
+    snapshot = trainer.build_resume_snapshot(args)
+    tampered = copy.deepcopy(snapshot)
+    tampered["fields"]["optimizer_type"] = "RAdamScheduleFree"
+
+    args.anima_resume_snapshot_strict = True
+    with pytest.raises(ValueError, match="optimizer_type"):
+        trainer.validate_resume_snapshot(args, tampered)

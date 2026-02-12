@@ -470,6 +470,34 @@ def test_parser_anima_monitor_options():
     assert args.anima_monitor_loss_spike_ratio == pytest.approx(2.5)
 
 
+def test_parser_anima_resume_snapshot_strict_default_false():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args([])
+    assert args.anima_resume_snapshot_strict is False
+
+
+def test_parser_anima_resume_snapshot_strict_can_enable():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args(["--anima_resume_snapshot_strict"])
+    assert args.anima_resume_snapshot_strict is True
+
+
+def test_parser_resume_ignore_optimizer_mismatch_default_true():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args([])
+    assert args.resume_ignore_optimizer_mismatch is True
+
+
+def test_parser_resume_ignore_optimizer_mismatch_can_disable():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args(["--no-resume_ignore_optimizer_mismatch"])
+    assert args.resume_ignore_optimizer_mismatch is False
+
+
 def test_assert_extra_args_xformers_flag_forces_anima_attention_backend(monkeypatch):
     native_entry = import_native_entry()
     _parser, args = _build_minimal_args()
