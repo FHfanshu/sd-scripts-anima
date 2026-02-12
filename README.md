@@ -106,7 +106,15 @@ accelerate launch anima_train_network.py --config_file configs/examples/anima_qu
 该过程在内存中完成，不会写出 `train_args.toml` / `dataset.toml` 中间文件。
 若同时传入 `--dataset_config`，则以 CLI 的 `--dataset_config` 为准，并忽略单文件中的 `[dataset]` 段。
 
-### 6. 单独启动 TensorBoard（需要另一个终端）
+### 6. 一键启动训练 + TensorBoard（同一条命令）
+
+```powershell
+$port=6006; Start-Process -WindowStyle Minimized -FilePath ".\venv\Scripts\python.exe" -ArgumentList "-m","tensorboard.main","--logdir","output/anima_quickstart/logs","--host","127.0.0.1","--port",$port; Write-Host "TensorBoard: http://127.0.0.1:$port"; .\venv\Scripts\accelerate.exe launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
+```
+
+如端口被占用，把 `$port=6006` 改为其他端口。
+
+### 7. 单独启动 TensorBoard（需要另一个终端）
 
 ```powershell
 .\venv\Scripts\python.exe -m tensorboard.main --logdir output/anima_quickstart/logs --host 127.0.0.1 --port 6006
@@ -116,7 +124,7 @@ accelerate launch anima_train_network.py --config_file configs/examples/anima_qu
 
 默认日志目录规则：`<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
 
-### 7. 保留的常用参数（示例中已覆盖）
+### 8. 保留的常用参数（示例中已覆盖）
 
 - 模型路径：`anima_transformer`、`vae`、`qwen`、`t5_tokenizer_dir`
 - 训练核心：`max_train_epochs`、`train_batch_size`、`gradient_accumulation_steps`、`learning_rate`
@@ -217,7 +225,15 @@ Note: when `--config_file` points to a root-style single TOML (with `[model]` an
 The conversion is performed in memory only (no intermediate `train_args.toml` / `dataset.toml` files are written).
 If both inline `[dataset]` and CLI `--dataset_config` are provided, CLI `--dataset_config` takes precedence.
 
-### 6. Start TensorBoard Separately (in another terminal)
+### 6. One-Command Start: Training + TensorBoard
+
+```powershell
+$port=6006; Start-Process -WindowStyle Minimized -FilePath ".\venv\Scripts\python.exe" -ArgumentList "-m","tensorboard.main","--logdir","output/anima_quickstart/logs","--host","127.0.0.1","--port",$port; Write-Host "TensorBoard: http://127.0.0.1:$port"; .\venv\Scripts\accelerate.exe launch anima_train_network.py --config_file configs/examples/anima_quickstart_single.toml
+```
+
+If the port is occupied, change `$port=6006` to another port.
+
+### 7. Start TensorBoard Separately (in another terminal)
 
 ```powershell
 .\venv\Scripts\python.exe -m tensorboard.main --logdir output/anima_quickstart/logs --host 127.0.0.1 --port 6006
@@ -227,7 +243,7 @@ Open in browser: `http://127.0.0.1:6006`
 
 Default run directory format: `<output_dir>/logs/<output_name>_YYYYMMDD_HHMMSS_ffffff`
 
-### 7. Common Parameters Kept in the Example
+### 8. Common Parameters Kept in the Example
 
 - Model paths: `anima_transformer`, `vae`, `qwen`, `t5_tokenizer_dir`
 - Training core: `max_train_epochs`, `train_batch_size`, `gradient_accumulation_steps`, `learning_rate`
