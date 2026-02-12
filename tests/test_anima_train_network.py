@@ -139,7 +139,7 @@ def test_apply_anima_runtime_defaults_enable_tensorboard_with_experiment_prefix(
     native_entry.apply_anima_runtime_defaults(args)
 
     assert args.log_with == "tensorboard"
-    assert str(args.logging_dir).replace("\\", "/").endswith("/output/exp1/logs")
+    assert str(args.logging_dir).replace("\\", "/").endswith("logs")
     assert args.log_prefix == "newzx-anima-lokr_"
 
 
@@ -163,6 +163,114 @@ def test_apply_anima_runtime_defaults_legacy_xfomers_false_does_not_disable_xfor
     native_entry.apply_anima_runtime_defaults(args)
 
     assert args.xformers is True
+
+
+def test_parser_auto_start_tensorboard_default_true():
+    native_entry = import_native_entry()
+    parser = native_entry.setup_parser()
+    args = parser.parse_args([])
+    assert args.auto_start_tensorboard is True
+    assert args.tensorboard_host == "127.0.0.1"
+    assert args.tensorboard_port == 6006
+
+
+def test_maybe_start_tensorboard_starts_when_enabled(monkeypatch, capsys):
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.log_with = "tensorboard"
+    args.logging_dir = "output/test/logs"
+    args.auto_start_tensorboard = True
+    args.tensorboard_host = "127.0.0.1"
+    args.tensorboard_port = 6123
+    args.tensorboard_logdir = ""
+
+    popen_calls = []
+
+    class _DummyPopen:
+        def __init__(self, cmd, **kwargs):
+            popen_calls.append((cmd, kwargs))
+
+    monkeypatch.setattr(native_entry, "_is_primary_process_for_side_effects", lambda: True)
+    monkeypatch.setattr(native_entry, "_pick_available_port", lambda host, port, max_tries=20: 6123)
+    monkeypatch.setattr(native_entry.subprocess, "Popen", _DummyPopen)
+
+    url = native_entry.maybe_start_tensorboard(args)
+
+    assert url == "http://127.0.0.1:6123"
+    assert len(popen_calls) == 1
+    assert "--logdir" in popen_calls[0][0]
+    assert "output/test/logs" in popen_calls[0][0]
+    out = capsys.readouterr().out
+    assert "TensorBoard: http://127.0.0.1:6123" in out
+
+
+def test_maybe_start_tensorboard_skips_when_log_with_not_tensorboard(monkeypatch):
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.log_with = "wandb"
+    args.logging_dir = "output/test/logs"
+    args.auto_start_tensorboard = True
+
+    called = {"popen": False}
+
+    def _fake_popen(*_args, **_kwargs):
+        called["popen"] = True
+        return None
+
+    monkeypatch.setattr(native_entry.subprocess, "Popen", _fake_popen)
+
+    url = native_entry.maybe_start_tensorboard(args)
+
+    assert url is None
+    assert called["popen"] is False
+
+
+def test_maybe_start_tensorboard_skips_on_non_primary_process(monkeypatch):
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.log_with = "tensorboard"
+    args.logging_dir = "output/test/logs"
+    args.auto_start_tensorboard = True
+
+    called = {"popen": False}
+
+    def _fake_popen(*_args, **_kwargs):
+        called["popen"] = True
+        return None
+
+    monkeypatch.setattr(native_entry, "_is_primary_process_for_side_effects", lambda: False)
+    monkeypatch.setattr(native_entry.subprocess, "Popen", _fake_popen)
+
+    url = native_entry.maybe_start_tensorboard(args)
+
+    assert url is None
+    assert called["popen"] is False
+
+
+def test_maybe_start_tensorboard_falls_back_to_next_port(monkeypatch, caplog):
+    native_entry = import_native_entry()
+    _parser, args = _build_minimal_args()
+    args.log_with = "tensorboard"
+    args.logging_dir = "output/test/logs"
+    args.auto_start_tensorboard = True
+    args.tensorboard_host = "127.0.0.1"
+    args.tensorboard_port = 6006
+    args.tensorboard_logdir = ""
+
+    class _DummyPopen:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(native_entry, "_is_primary_process_for_side_effects", lambda: True)
+    monkeypatch.setattr(native_entry, "_pick_available_port", lambda host, port, max_tries=20: 6007)
+    monkeypatch.setattr(native_entry.subprocess, "Popen", _DummyPopen)
+
+    with caplog.at_level("WARNING"):
+        url = native_entry.maybe_start_tensorboard(args)
+
+    assert url == "http://127.0.0.1:6007"
+    assert args.tensorboard_port == 6007
+    assert "falling back to available port 6007" in caplog.text
 
 
 def test_maybe_auto_convert_single_file_config_for_root_style(tmp_path: Path):

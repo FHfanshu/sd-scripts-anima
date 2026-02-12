@@ -4,6 +4,8 @@ import argparse
 import math
 import os
 import re
+import socket
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -139,8 +141,7 @@ def apply_anima_runtime_defaults(args):
 
     logging_dir = str(getattr(args, "logging_dir", "") or "").strip()
     if not logging_dir:
-        output_dir = str(getattr(args, "output_dir", "") or "").strip()
-        args.logging_dir = os.path.join(output_dir, "logs") if output_dir else "logs"
+        args.logging_dir = "logs"
 
     log_prefix = str(getattr(args, "log_prefix", "") or "").strip()
     if not log_prefix:
@@ -171,6 +172,118 @@ def apply_anima_network_defaults(args):
     train_norm = bool(getattr(args, "train_norm", True))
     _upsert_network_arg(args, "train_norm", "true" if train_norm else "false")
     return args
+
+
+def _is_primary_process_for_side_effects() -> bool:
+    # Avoid spawning extra processes on each distributed worker.
+    local_rank = str(os.environ.get("LOCAL_RANK", "") or "").strip()
+    if local_rank:
+        try:
+            return int(local_rank) == 0
+        except ValueError:
+            return local_rank == "0"
+
+    rank = str(os.environ.get("RANK", "") or "").strip()
+    if rank:
+        try:
+            return int(rank) == 0
+        except ValueError:
+            return rank == "0"
+
+    return True
+
+
+def _log_with_has_tensorboard(log_with: str) -> bool:
+    value = str(log_with or "").strip().lower()
+    return value in {"tensorboard", "all"}
+
+
+def _port_is_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, int(port)))
+            return True
+        except OSError:
+            return False
+
+
+def _pick_available_port(host: str, preferred_port: int, max_tries: int = 20) -> int:
+    preferred = max(0, int(preferred_port))
+    if preferred == 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            return int(sock.getsockname()[1])
+
+    if _port_is_available(host, preferred):
+        return preferred
+
+    for offset in range(1, max_tries + 1):
+        candidate = preferred + offset
+        if _port_is_available(host, candidate):
+            return candidate
+
+    raise RuntimeError(f"No available TensorBoard port found in range [{preferred}, {preferred + max_tries}].")
+
+
+def maybe_start_tensorboard(args):
+    if not bool(getattr(args, "auto_start_tensorboard", True)):
+        return None
+    if not _is_primary_process_for_side_effects():
+        return None
+    if not _log_with_has_tensorboard(str(getattr(args, "log_with", "") or "")):
+        return None
+
+    logdir = str(getattr(args, "tensorboard_logdir", "") or "").strip() or str(getattr(args, "logging_dir", "") or "").strip()
+    if not logdir:
+        logger.warning("TensorBoard auto-start skipped: logging directory is empty.")
+        return None
+    os.makedirs(logdir, exist_ok=True)
+
+    host = str(getattr(args, "tensorboard_host", "127.0.0.1") or "127.0.0.1").strip()
+    preferred_port = int(getattr(args, "tensorboard_port", 6006) or 6006)
+
+    try:
+        resolved_port = _pick_available_port(host, preferred_port, max_tries=20)
+    except Exception as exc:
+        logger.warning("TensorBoard auto-start skipped: %s", exc)
+        return None
+
+    if resolved_port != preferred_port:
+        logger.warning(
+            "TensorBoard port %s is busy; falling back to available port %s.",
+            preferred_port,
+            resolved_port,
+        )
+
+    tb_cmd = [
+        sys.executable,
+        "-m",
+        "tensorboard.main",
+        "--logdir",
+        logdir,
+        "--host",
+        host,
+        "--port",
+        str(resolved_port),
+    ]
+
+    try:
+        subprocess.Popen(
+            tb_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=os.getcwd(),
+        )
+    except Exception as exc:
+        logger.warning("TensorBoard auto-start failed: %s", exc)
+        return None
+
+    tb_url = f"http://{host}:{resolved_port}"
+    logger.info("TensorBoard started: %s (logdir=%s)", tb_url, logdir)
+    print(f"TensorBoard: {tb_url}")
+    setattr(args, "tensorboard_port", resolved_port)
+    return tb_url
 
 
 class AnimaNetworkTrainer(train_network.NetworkTrainer):
@@ -752,6 +865,30 @@ def setup_parser() -> argparse.ArgumentParser:
         default=3.0,
         help="Loss spike threshold ratio against previous finite step loss.",
     )
+    parser.add_argument(
+        "--auto_start_tensorboard",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Auto-start TensorBoard web service before training when log_with includes tensorboard.",
+    )
+    parser.add_argument(
+        "--tensorboard_host",
+        type=str,
+        default="127.0.0.1",
+        help="Host for TensorBoard auto-start web service.",
+    )
+    parser.add_argument(
+        "--tensorboard_port",
+        type=int,
+        default=6006,
+        help="Preferred port for TensorBoard auto-start web service.",
+    )
+    parser.add_argument(
+        "--tensorboard_logdir",
+        type=str,
+        default="",
+        help="Optional TensorBoard logdir override. Defaults to --logging_dir.",
+    )
     parser.set_defaults(
         network_module="networks.lora_anima",
         caption_extension=".txt",
@@ -772,6 +909,7 @@ if __name__ == "__main__":
     args = normalize_optimizer_aliases(args)
     args = apply_anima_runtime_defaults(args)
     args = apply_anima_network_defaults(args)
+    maybe_start_tensorboard(args)
 
     trainer = AnimaNetworkTrainer()
     trainer.train(args)

@@ -58,10 +58,19 @@ accelerate launch anima_train_network.py --config_file configs/examples/anima_qu
 ## 6. 默认行为（无需额外参数）
 
 - 默认启用 TensorBoard 日志
-- 日志根目录默认 `<output_dir>/logs`
+- 当 `log_with=tensorboard`（或 `all`）时，训练启动前自动拉起 TensorBoard Web 服务
+- 控制台会打印 TensorBoard 访问地址（若默认端口占用会自动顺延到可用端口）
+- 日志根目录默认 `./logs`
 - 日志子目录默认 `<output_name>_YYYYMMDD_HHMMSS_ffffff`
 - `train_norm` 默认开启
 - `t5_tokenizer_dir` 缺文件时默认自动下载补齐（HF 优先，失败后 ModelScope 回退）
+
+可选参数：
+
+- `--tensorboard_host`（默认 `127.0.0.1`）
+- `--tensorboard_port`（默认 `6006`）
+- `--tensorboard_logdir`（默认复用 `logging_dir`）
+- `--no-auto_start_tensorboard`（关闭自动拉起）
 
 ## 7. 续训建议
 
@@ -122,10 +131,19 @@ If both inline `[dataset]` and CLI `--dataset_config` are provided, CLI `--datas
 ## 6. Defaults (no extra flags needed)
 
 - TensorBoard logging is enabled by default
-- Default log root: `<output_dir>/logs`
+- When `log_with=tensorboard` (or `all`), TensorBoard web service is auto-started before training
+- TensorBoard URL is printed in console (if default port is busy, the next available port is used)
+- Default log root: `./logs`
 - Default run dir: `<output_name>_YYYYMMDD_HHMMSS_ffffff`
 - `train_norm` is enabled by default
 - Missing tokenizer files under `t5_tokenizer_dir` are auto-downloaded by default (HF first, ModelScope fallback)
+
+Optional flags:
+
+- `--tensorboard_host` (default `127.0.0.1`)
+- `--tensorboard_port` (default `6006`)
+- `--tensorboard_logdir` (defaults to `logging_dir`)
+- `--no-auto_start_tensorboard` (disable auto-start)
 
 ## 7. Resume Recommendation
 

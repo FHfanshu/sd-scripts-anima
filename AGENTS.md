@@ -418,3 +418,20 @@
   - 删除“训练 + TensorBoard 一键同启”脚本示例。
   - 改为明确“TensorBoard 需要在另一个终端单独启动”。
   - 提供固定端口命令与访问地址：`http://127.0.0.1:6006`。
+- 按用户要求实现“训练时自动拉起 TensorBoard Web 服务”：
+  - `anima_train_network.py` 新增 `maybe_start_tensorboard(args)`，在 `trainer.train(args)` 前自动启动 TensorBoard。
+  - 仅主进程执行自动拉起（避免分布式多进程重复启动）。
+  - 当 `log_with=tensorboard/all` 且 `auto_start_tensorboard=true` 时生效；控制台打印 URL。
+  - 默认端口 `6006` 占用时自动顺延到可用端口并告警。
+  - 新增参数：`--auto_start_tensorboard/--no-auto_start_tensorboard`、`--tensorboard_host`、`--tensorboard_port`、`--tensorboard_logdir`。
+- 测试更新：
+  - `tests/test_anima_train_network.py` 新增自动拉起相关断言（默认值、启动条件、非主进程跳过、端口回退）。
+- 文档更新：
+  - `README.md` 与 `docs/anima_train_network.md` 同步为“默认自动拉起 TensorBoard”，并补充可选开关参数。
+- 验证：
+  - `python -m pytest -q tests/test_anima_train_network.py` -> `30 passed`
+  - `python -m pytest -q tests/test_anima_process_batch.py tests/test_anima_network_modules.py tests/test_anima_t5_auto_download.py` -> `18 passed`
+- 调整 Anima 入口日志目录默认值：
+  - `anima_train_network.py::apply_anima_runtime_defaults` 在未显式设置 `logging_dir` 时，默认改为固定 `./logs`（不再跟随 `output_dir`）。
+  - 同步更新 `README.md` 与 `docs/anima_train_network.md` 的默认日志目录说明为 `./logs/<output_name>_...`。
+  - 更新测试断言并回归：`python -m pytest -q tests/test_anima_train_network.py` -> `30 passed`。
